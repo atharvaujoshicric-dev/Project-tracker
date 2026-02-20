@@ -129,11 +129,7 @@ else:
                         if st.button("📁 Move to Closed"):
                             run_query("UPDATE tasks SET status='Closed' WHERE task_id=?", (sel_task_id,))
                             st.rerun()
-                    else:
-                        if st.button("🗑️ Delete Permanently"):
-                            run_query("DELETE FROM tasks WHERE task_id=?", (sel_task_id,))
-                            st.error("Task Deleted Forever.")
-                            st.rerun()
+                    
             else: st.info(f"No {f_stat.lower()} tasks.")
         else: st.warning("No projects assigned.")
 
