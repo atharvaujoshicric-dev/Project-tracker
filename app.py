@@ -30,7 +30,7 @@ def run_query(query, params=(), fetch=False):
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
 init_db()
 
-CATEGORIES = ["Design", "Copy", "Video", "PPC", "Web Dev", "Report"]
+CATEGORIES = ["Design", "Copy", "Video", "PPC", "Web Dev", "Report","Others"]
 REPORT_SUBS = ["Weekly report", "PPC report", "CP aggregation report", "Pre-Sales report", "TVA"]
 
 if 'logged_in' not in st.session_state:
