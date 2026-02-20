@@ -3,15 +3,32 @@ import sqlite3
 import pandas as pd
 
 # --- DATABASE SETUP ---
+# --- DATABASE SETUP ---
 def init_db():
-    conn = sqlite3.connect('beyondwalls_pro.db')
+    # Using a fresh name to avoid column mismatch errors
+    conn = sqlite3.connect('beyondwalls_v2.db') 
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, owner TEXT)')
-    c.execute('''CREATE TABLE IF NOT EXISTS tasks 
-                 (task_id TEXT PRIMARY KEY, project_id INTEGER, category TEXT, sub_category TEXT,
-                  description TEXT, deadline_date DATE, deadline_half TEXT, status TEXT DEFAULT 'Pending')''')
     
+    # Updated table structure with 8 columns
+    c.execute('''CREATE TABLE IF NOT EXISTS tasks 
+                 (task_id TEXT PRIMARY KEY, 
+                  project_id INTEGER, 
+                  category TEXT, 
+                  sub_category TEXT,
+                  description TEXT, 
+                  deadline_date DATE, 
+                  deadline_half TEXT, 
+                  status TEXT DEFAULT 'Pending')''')
+    
+    # --- MIGRATION CHECK ---
+    # If the database exists but lacks sub_category, this adds it manually
+    try:
+        c.execute('SELECT sub_category FROM tasks LIMIT 1')
+    except sqlite3.OperationalError:
+        c.execute('ALTER TABLE tasks ADD COLUMN sub_category TEXT DEFAULT ""')
+
     c.execute("SELECT * FROM users WHERE username='admin'")
     if not c.fetchone():
         c.execute("INSERT INTO users VALUES ('admin', 'admin123', 'Admin')")
@@ -19,7 +36,8 @@ def init_db():
     conn.close()
 
 def run_query(query, params=(), fetch=False):
-    with sqlite3.connect('beyondwalls_pro.db') as conn:
+    # Ensure this matches the name in init_db
+    with sqlite3.connect('beyondwalls_v2.db') as conn:
         c = conn.cursor()
         c.execute(query, params)
         conn.commit()
