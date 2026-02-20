@@ -4,8 +4,8 @@ import pandas as pd
 
 # --- DATABASE SETUP ---
 def init_db():
-    # v3 to ensure a clean slate and avoid column mismatch errors
-    conn = sqlite3.connect('beyondwalls_v3.db') 
+    # v4 to ensure a clean slate and avoid column mismatch errors
+    conn = sqlite3.connect('beyondwalls_v4.db') 
     c = conn.cursor()
     c.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, owner TEXT)')
@@ -20,7 +20,7 @@ def init_db():
     conn.close()
 
 def run_query(query, params=(), fetch=False):
-    with sqlite3.connect('beyondwalls_v3.db') as conn:
+    with sqlite3.connect('beyondwalls_v4.db') as conn:
         c = conn.cursor()
         c.execute(query, params)
         conn.commit()
@@ -108,7 +108,6 @@ else:
                         if st.button("✅ Mark Completed"):
                             run_query("UPDATE tasks SET status='Completed' WHERE task_id=?", (sel_task_id,))
                             st.rerun()
-                        # Edit Expander
                         with st.expander(f"📝 Edit Task {sel_task_id}"):
                             curr = run_query("SELECT category, sub_category, description, deadline_date, deadline_half FROM tasks WHERE task_id=?", (sel_task_id,), fetch=True)[0]
                             with st.form(f"edit_{sel_task_id}"):
@@ -131,7 +130,6 @@ else:
                             run_query("UPDATE tasks SET status='Closed' WHERE task_id=?", (sel_task_id,))
                             st.rerun()
                     else:
-                        # User can only delete in Closed status, no re-open
                         if st.button("🗑️ Delete Permanently"):
                             run_query("DELETE FROM tasks WHERE task_id=?", (sel_task_id,))
                             st.error("Task Deleted Forever.")
@@ -139,6 +137,75 @@ else:
             else: st.info(f"No {f_stat.lower()} tasks.")
         else: st.warning("No projects assigned.")
 
-    # --- ADMIN CONTROL ---
+    # --- FULL ADMIN CONTROL ---
     elif choice == "Admin Control":
-        # ... (Rest of the Admin logic remains the same as the previous full version)
+        st.header("Admin Management Dashboard")
+        t1, t2, t3 = st.tabs(["Manage Users", "Manage Projects", "Manual Transfer"])
+        
+        all_users = [u[0] for u in run_query("SELECT username FROM users", fetch=True)]
+
+        with t1: # Manage Users
+            st.subheader("Add New User")
+            with st.form("admin_add_user"):
+                nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
+                nr = st.selectbox("Role", ["User", "Admin"])
+                if st.form_submit_button("Create User"):
+                    try: 
+                        run_query("INSERT INTO users VALUES (?,?,?)", (nu, np, nr))
+                        st.success(f"User {nu} created!")
+                        st.rerun()
+                    except: st.error("Username already exists")
+
+            st.divider()
+            st.subheader("Delete User")
+            du = st.selectbox("Select User to Remove", all_users)
+            user_projs = run_query("SELECT id, name FROM projects WHERE owner=?", (du,), fetch=True)
+            
+            if du == 'admin':
+                st.error("Cannot delete the primary admin.")
+            elif user_projs:
+                st.warning(f"Note: {du} owns {len(user_projs)} projects.")
+                successor = st.selectbox("Transfer their projects to:", [u for u in all_users if u != du])
+                if st.button("Transfer & Delete User"):
+                    run_query("UPDATE projects SET owner=? WHERE owner=?", (successor, du))
+                    run_query("DELETE FROM users WHERE username=?", (du,))
+                    st.success(f"Moved projects to {successor} and deleted {du}")
+                    st.rerun()
+            else:
+                if st.button("Confirm Delete"):
+                    run_query("DELETE FROM users WHERE username=?", (du,))
+                    st.rerun()
+
+        with t2: # Manage Projects
+            st.subheader("Create Project")
+            with st.form("admin_add_proj"):
+                pn = st.text_input("Project Name")
+                po = st.selectbox("Assign to", all_users)
+                if st.form_submit_button("Create Project"):
+                    run_query("INSERT INTO projects (name, owner) VALUES (?,?)", (pn, po))
+                    st.success("Project assigned!")
+                    st.rerun()
+            
+            st.divider()
+            st.subheader("Existing Projects")
+            all_p = run_query("SELECT * FROM projects", fetch=True)
+            if all_p:
+                pdf = pd.DataFrame(all_p, columns=["ID", "Name", "Owner"])
+                st.table(pdf)
+                dp = st.selectbox("Delete Project ID Permanently", pdf["ID"])
+                if st.button("Delete Project & All Associated Tasks"):
+                    run_query("DELETE FROM projects WHERE id=?", (dp,))
+                    run_query("DELETE FROM tasks WHERE project_id=?", (dp,))
+                    st.rerun()
+
+        with t3: # Manual Transfer
+            st.subheader("Manual Project Transfer")
+            all_p_data = run_query("SELECT id, name, owner FROM projects", fetch=True)
+            if all_p_data:
+                proj_list = [f"{p[0]} - {p[1]} (Owner: {p[2]})" for p in all_p_data]
+                selected_p_str = st.selectbox("Project to Move", proj_list)
+                target_u = st.selectbox("Target Recipient", all_users)
+                if st.button("Confirm Manual Transfer"):
+                    run_query("UPDATE projects SET owner=? WHERE id=?", (target_u, selected_p_str.split(" - ")[0]))
+                    st.success("Project Transferred Successfully")
+                    st.rerun()
