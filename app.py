@@ -51,6 +51,7 @@ else:
     menu = ["My Tasks"]
     if st.session_state.role == 'Admin': menu.append("Admin Control")
     choice = st.sidebar.selectbox("Menu", menu)
+    
     if st.sidebar.button("Logout"):
         st.session_state.logged_in = False
         st.rerun()
@@ -74,9 +75,7 @@ else:
                 with st.expander("➕ Add New Task"):
                     with st.form("new_task"):
                         cat = st.selectbox("Category", CATEGORIES)
-                        sub_cat = ""
-                        if cat == "Report":
-                            sub_cat = st.selectbox("Report Type", REPORT_SUBS)
+                        sub_cat = st.selectbox("Report Type", REPORT_SUBS) if cat == "Report" else ""
                         desc = st.text_area("Task Description")
                         d_date = st.date_input("Deadline")
                         d_half = st.selectbox("Half", ["FH", "SH"])
@@ -89,7 +88,7 @@ else:
                             st.success(f"Task {unique_id} added!")
                             st.rerun()
 
-            st.subheader(f"{f_stat} Tasks for {sel_proj_name}")
+            st.subheader(f"{f_stat} Tasks")
             query = "SELECT task_id, category, sub_category, description, deadline_date, deadline_half FROM tasks WHERE project_id=? AND status=?"
             params = [sel_proj_id, f_stat]
             if f_cat:
@@ -101,48 +100,106 @@ else:
                 df = pd.DataFrame(tasks, columns=["ID", "Category", "Sub-Cat", "Description", "Deadline", "Half"])
                 st.dataframe(df, use_container_width=True)
                 
-                sel_task_id = st.selectbox("Select Task ID to take action:", df["ID"])
-                
-                # Action Buttons
+                sel_task_id = st.selectbox("Select Task ID:", df["ID"])
                 c1, c2 = st.columns(2)
                 with c1:
                     if f_stat == "Pending":
-                        if st.button("✅ Mark as Completed"):
+                        if st.button("✅ Mark Completed"):
                             run_query("UPDATE tasks SET status='Completed' WHERE task_id=?", (sel_task_id,))
                             st.rerun()
-                        
-                        # EDIT LOGIC
                         with st.expander(f"📝 Edit Task {sel_task_id}"):
-                            current_data = run_query("SELECT category, sub_category, description, deadline_date, deadline_half FROM tasks WHERE task_id=?", (sel_task_id,), fetch=True)[0]
-                            with st.form(f"edit_form_{sel_task_id}"):
-                                e_cat = st.selectbox("Edit Category", CATEGORIES, index=CATEGORIES.index(current_data[0]))
-                                e_sub = ""
-                                if e_cat == "Report":
-                                    idx = REPORT_SUBS.index(current_data[1]) if current_data[1] in REPORT_SUBS else 0
-                                    e_sub = st.selectbox("Edit Report Type", REPORT_SUBS, index=idx)
-                                e_desc = st.text_area("Edit Description", value=current_data[2])
-                                e_date = st.date_input("Edit Deadline", value=pd.to_datetime(current_data[3]))
-                                e_half = st.selectbox("Edit Half", ["FH", "SH"], index=0 if current_data[4] == "FH" else 1)
-                                if st.form_submit_button("Save Changes"):
+                            curr = run_query("SELECT category, sub_category, description, deadline_date, deadline_half FROM tasks WHERE task_id=?", (sel_task_id,), fetch=True)[0]
+                            with st.form(f"edit_{sel_task_id}"):
+                                e_cat = st.selectbox("Cat", CATEGORIES, index=CATEGORIES.index(curr[0]))
+                                e_sub = st.selectbox("Sub", REPORT_SUBS, index=REPORT_SUBS.index(curr[1]) if curr[1] in REPORT_SUBS else 0) if e_cat=="Report" else ""
+                                e_desc = st.text_area("Desc", value=curr[2])
+                                e_date = st.date_input("Date", value=pd.to_datetime(curr[3]))
+                                e_half = st.selectbox("Half", ["FH", "SH"], index=0 if curr[4]=="FH" else 1)
+                                if st.form_submit_button("Save"):
                                     run_query("UPDATE tasks SET category=?, sub_category=?, description=?, deadline_date=?, deadline_half=? WHERE task_id=?", 
                                               (e_cat, e_sub, e_desc, e_date, e_half, sel_task_id))
-                                    st.success("Task Updated!")
                                     st.rerun()
                     else:
-                        if st.button("↩️ Re-open Task"):
+                        if st.button("↩️ Re-open"):
                             run_query("UPDATE tasks SET status='Pending' WHERE task_id=?", (sel_task_id,))
                             st.rerun()
-
                 with c2:
                     if f_stat != "Closed":
                         if st.button("📁 Move to Closed"):
                             run_query("UPDATE tasks SET status='Closed' WHERE task_id=?", (sel_task_id,))
                             st.rerun()
-            else: st.info(f"No {f_stat.lower()} tasks found.")
-        else: st.warning("No projects assigned to you.")
+            else: st.info(f"No {f_stat.lower()} tasks.")
+        else: st.warning("No projects assigned.")
 
-    # --- ADMIN CONTROL (RETAINING PREVIOUS DELETE/TRANSFER LOGIC) ---
+    # --- FULL ADMIN CONTROL ---
     elif choice == "Admin Control":
         st.header("Admin Management Dashboard")
         t1, t2, t3 = st.tabs(["Manage Users", "Manage Projects", "Manual Transfer"])
-        # ... [Same Admin logic as previous message remains here for user & project deletion/transfer] ...
+        
+        all_users = [u[0] for u in run_query("SELECT username FROM users", fetch=True)]
+
+        with t1: # Manage Users
+            st.subheader("Add New User")
+            with st.form("admin_add_user"):
+                nu, np = st.text_input("New Username"), st.text_input("New Password", type="password")
+                nr = st.selectbox("Role", ["User", "Admin"])
+                if st.form_submit_button("Create User"):
+                    try: 
+                        run_query("INSERT INTO users VALUES (?,?,?)", (nu, np, nr))
+                        st.success(f"User {nu} created!")
+                        st.rerun()
+                    except: st.error("Username already exists")
+
+            st.divider()
+            st.subheader("Delete User")
+            du = st.selectbox("Select User to Remove", all_users)
+            user_projs = run_query("SELECT id, name FROM projects WHERE owner=?", (du,), fetch=True)
+            
+            if du == 'admin':
+                st.error("Cannot delete the primary admin.")
+            elif user_projs:
+                st.warning(f"Note: {du} owns {len(user_projs)} projects.")
+                successor = st.selectbox("Transfer their projects to:", [u for u in all_users if u != du])
+                if st.button("Transfer & Delete User"):
+                    run_query("UPDATE projects SET owner=? WHERE owner=?", (successor, du))
+                    run_query("DELETE FROM users WHERE username=?", (du,))
+                    st.success(f"Moved projects to {successor} and deleted {du}")
+                    st.rerun()
+            else:
+                if st.button("Confirm Delete"):
+                    run_query("DELETE FROM users WHERE username=?", (du,))
+                    st.rerun()
+
+        with t2: # Manage Projects
+            st.subheader("Create Project")
+            with st.form("admin_add_proj"):
+                pn = st.text_input("Project Name")
+                po = st.selectbox("Assign to", all_users)
+                if st.form_submit_button("Create Project"):
+                    run_query("INSERT INTO projects (name, owner) VALUES (?,?)", (pn, po))
+                    st.success("Project assigned!")
+                    st.rerun()
+            
+            st.divider()
+            st.subheader("Existing Projects")
+            all_p = run_query("SELECT * FROM projects", fetch=True)
+            if all_p:
+                pdf = pd.DataFrame(all_p, columns=["ID", "Name", "Owner"])
+                st.table(pdf)
+                dp = st.selectbox("Delete Project ID Permanently", pdf["ID"])
+                if st.button("Delete Project & All Associated Tasks"):
+                    run_query("DELETE FROM projects WHERE id=?", (dp,))
+                    run_query("DELETE FROM tasks WHERE project_id=?", (dp,))
+                    st.rerun()
+
+        with t3: # Manual Transfer
+            st.subheader("Manual Project Transfer")
+            all_p_data = run_query("SELECT id, name, owner FROM projects", fetch=True)
+            if all_p_data:
+                proj_list = [f"{p[0]} - {p[1]} (Owner: {p[2]})" for p in all_p_data]
+                selected_p_str = st.selectbox("Project to Move", proj_list)
+                target_u = st.selectbox("Target Recipient", all_users)
+                if st.button("Confirm Manual Transfer"):
+                    run_query("UPDATE projects SET owner=? WHERE id=?", (target_u, selected_p_str.split(" - ")[0]))
+                    st.success("Project Transferred Successfully")
+                    st.rerun()
