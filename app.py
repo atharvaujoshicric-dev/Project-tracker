@@ -37,7 +37,7 @@ def load_data(tab):
         df = conn.read(spreadsheet=SHEET_URL, worksheet=tab, ttl=0)
         df.columns = df.columns.str.strip().str.lower()
         return df
-    except Exception as e:
+    except Exception:
         return pd.DataFrame()
 
 def save_data(df, tab):
@@ -45,7 +45,7 @@ def save_data(df, tab):
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
     st.session_state['last_sync'] = get_ist_time()
-    st.session_state['show_add_form'] = False  # Force collapse
+    st.session_state['show_add_form'] = False  
     st.session_state['delete_confirm'] = False
 
 # --- 5. LOGIN LOGIC ---
@@ -65,6 +65,7 @@ if not st.session_state['logged_in']:
                     st.session_state['last_sync'] = get_ist_time()
                     st.rerun()
                 else: st.error("Wrong credentials")
+            else: st.error("User database error.")
 else:
     # --- 6. SIDEBAR ---
     st.sidebar.title(f"User: {st.session_state['user']}")
@@ -99,13 +100,13 @@ else:
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 if f_stat == "Pending":
-                    # REPLACED EXPANDER WITH BUTTON TOGGLE FOR 100% RELIABILITY
+                    # Form Toggle
                     if not st.session_state['show_add_form']:
                         if st.button("➕ Add New Task"):
                             st.session_state['show_add_form'] = True
                             st.rerun()
                     else:
-                        if st.button("➖ Cancel / Close Form"):
+                        if st.button("➖ Cancel Form"):
                             st.session_state['show_add_form'] = False
                             st.rerun()
                         
@@ -119,10 +120,19 @@ else:
                             if st.form_submit_button("Save Task"):
                                 tasks_latest = load_data("tasks")
                                 cat_prefix = cat[:3].upper()
-                                # Category-specific counting
-                                cat_tasks = tasks_latest[tasks_latest['category'].str.lower() == cat.lower()] if not tasks_latest.empty else []
-                                new_id = f"{cat_prefix}-{101 + len(cat_tasks)}"
                                 
+                                # PROJECT + CATEGORY SPECIFIC COUNT
+                                if not tasks_latest.empty:
+                                    # Filter for current project AND current category
+                                    match_tasks = tasks_latest[
+                                        (tasks_latest['project_id'].astype(str) == str(sel_p_id)) & 
+                                        (tasks_latest['category'].str.lower() == cat.lower())
+                                    ]
+                                    new_count = 101 + len(match_tasks)
+                                else:
+                                    new_count = 101
+                                
+                                new_id = f"{cat_prefix}-{new_count}"
                                 new_row = pd.DataFrame([{
                                     "task_id": new_id, "project_id": sel_p_id, "category": cat,
                                     "sub_category": sub, "description": desc, "status": "pending",
@@ -148,7 +158,6 @@ else:
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
                                     
-                                    # EDIT FORM (Also logic-based toggle)
                                     with st.expander("📝 Edit Task Details"):
                                         curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
                                         try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
@@ -181,6 +190,7 @@ else:
                                             st.error("Confirm Delete?")
                                             if st.button("🔥 Yes, Delete"):
                                                 tasks_latest = load_data("tasks")
+                                                # Filter out the selected task
                                                 tasks_latest = tasks_latest[tasks_latest['task_id'] != sel_tid]
                                                 save_data(tasks_latest, "tasks")
                                                 st.rerun()
