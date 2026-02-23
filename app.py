@@ -1,6 +1,7 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+from datetime import datetime
 
 # --- CONFIG ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
@@ -78,8 +79,7 @@ else:
                 sel_p_name = st.selectbox("Select Project", my_projs['name'].tolist())
                 sel_p_id = my_projs[my_projs['name'] == sel_p_name]['id'].iloc[0]
                 
-                # --- SEARCH & FILTERS ---
-                search_query = st.text_input("🔍 Search tasks by description or ID", "").lower()
+                search_query = st.text_input("🔍 Search tasks", "").lower()
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 # ADD TASK (Pending Only)
@@ -87,13 +87,18 @@ else:
                     with st.expander("➕ Add New Task"):
                         with st.form("new_t"):
                             cat = st.selectbox("Category", CATEGORIES)
+                            # Sub-category only shows for Reports
                             sub = st.selectbox("Report Type", REPORT_SUBS) if cat == "Report" else ""
                             desc = st.text_area("Description")
+                            d_date = st.date_input("Deadline Date", datetime.now())
+                            d_priority = st.selectbox("Priority", ["FH", "SH"])
+                            
                             if st.form_submit_button("Save Task"):
                                 new_id = f"{cat[:3].upper()}-{len(tasks_df)+101}"
                                 new_row = pd.DataFrame([{
                                     "task_id": new_id, "project_id": sel_p_id, "category": cat,
-                                    "sub_category": sub, "description": desc, "status": "pending"
+                                    "sub_category": sub, "description": desc, "status": "pending",
+                                    "deadline_date": str(d_date), "deadline_half": d_priority
                                 }])
                                 save_data(pd.concat([tasks_df, new_row], ignore_index=True), "tasks")
                                 st.rerun()
@@ -103,15 +108,12 @@ else:
                     view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())]
                     
                     if search_query:
-                        view_df = view_df[
-                            view_df['description'].str.lower().str.contains(search_query) | 
-                            view_df['task_id'].str.lower().str.contains(search_query)
-                        ]
+                        view_df = view_df[view_df['description'].str.lower().str.contains(search_query) | view_df['task_id'].str.lower().str.contains(search_query)]
                     
                     st.dataframe(view_df, use_container_width=True)
                     
                     if not view_df.empty:
-                        sel_tid = st.selectbox("Select Task ID to take action", view_df['task_id'].tolist())
+                        sel_tid = st.selectbox("Select Task ID", view_df['task_id'].tolist())
                         c1, c2 = st.columns(2)
                         with c1:
                             if f_stat == "Pending":
@@ -119,30 +121,30 @@ else:
                                     tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'completed'
                                     save_data(tasks_df, "tasks")
                                     st.rerun()
-                                with st.expander("📝 Edit Description"):
-                                    curr_desc = tasks_df[tasks_df['task_id'] == sel_tid]['description'].values[0]
+                                
+                                with st.expander("📝 Edit Task"):
+                                    curr = tasks_df[tasks_df['task_id'] == sel_tid].iloc[0]
                                     with st.form(f"edit_{sel_tid}"):
-                                        new_desc = st.text_area("New Description", value=curr_desc)
+                                        e_desc = st.text_area("Edit Description", value=curr['description'])
+                                        e_date = st.date_input("Edit Date", value=pd.to_datetime(curr['deadline_date']))
+                                        e_half = st.selectbox("Edit Priority", ["FH", "SH"], index=0 if curr['deadline_half'] == "FH" else 1)
                                         if st.form_submit_button("Update"):
-                                            tasks_df.loc[tasks_df['task_id'] == sel_tid, 'description'] = new_desc
+                                            tasks_df.loc[tasks_df['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, str(e_date), e_half]
                                             save_data(tasks_df, "tasks")
                                             st.rerun()
-                            elif f_stat == "Completed":
-                                if st.button("↩️ Re-open"):
-                                    tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'pending'
-                                    save_data(tasks_df, "tasks")
-                                    st.rerun()
-                            elif f_stat == "Closed" and st.session_state.role == "Admin":
-                                if st.button("🔓 Admin: Unlock Task"):
-                                    tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'pending'
-                                    save_data(tasks_df, "tasks")
-                                    st.rerun()
+                            elif f_stat == "Completed" and st.button("↩️ Re-open"):
+                                tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'pending'
+                                save_data(tasks_df, "tasks")
+                                st.rerun()
+                            elif f_stat == "Closed" and st.session_state.role == "Admin" and st.button("🔓 Admin: Unlock"):
+                                tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'pending'
+                                save_data(tasks_df, "tasks")
+                                st.rerun()
                         with c2:
-                            if f_stat != "Closed":
-                                if st.button("📁 Move to Closed"):
-                                    tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'closed'
-                                    save_data(tasks_df, "tasks")
-                                    st.rerun()
+                            if f_stat != "Closed" and st.button("📁 Move to Closed"):
+                                tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'closed'
+                                save_data(tasks_df, "tasks")
+                                st.rerun()
                 else: st.info("No tasks found.")
             else: st.warning("No projects assigned.")
         else: st.error("Database header error.")
