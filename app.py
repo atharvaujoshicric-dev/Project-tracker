@@ -21,7 +21,6 @@ if 'last_sync' not in st.session_state:
     st.session_state['last_sync'] = "Never"
 if 'delete_confirm' not in st.session_state:
     st.session_state['delete_confirm'] = False
-# This key forces UI components to reset when incremented
 if 'refresh_key' not in st.session_state:
     st.session_state['refresh_key'] = 0
 
@@ -48,7 +47,6 @@ def save_data(df, tab):
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
     st.session_state['last_sync'] = get_ist_time()
-    # Incrementing this closes expanders and resets selections
     st.session_state['refresh_key'] += 1
     st.session_state['delete_confirm'] = False
 
@@ -106,7 +104,6 @@ else:
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 if f_stat == "Pending":
-                    # Expanded=False with dynamic key ensures it closes on save
                     with st.expander("➕ Add New Task", expanded=False):
                         with st.form(f"new_t_form_{st.session_state['refresh_key']}", clear_on_submit=True):
                             cat = st.selectbox("Category", ["Design", "Copy", "Video", "PPC", "Web Dev", "Report", "Others"])
@@ -134,7 +131,6 @@ else:
                     st.dataframe(view_df, use_container_width=True)
                     
                     if not view_df.empty:
-                        # Dynamic key resets the selection box after every action
                         sel_tid = st.selectbox("Select Task ID to Action", ["Select ID"] + view_df['task_id'].tolist(), key=f"sel_task_{st.session_state['refresh_key']}")
                         
                         if sel_tid != "Select ID":
@@ -147,38 +143,39 @@ else:
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
                                     
-                                    with st.expander("📝 Edit Task Details", expanded=False):
-                                        curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
-                                        try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
-                                        except: v_date = datetime.now(IST)
-                                        
-                                        with st.form(f"edit_form_{sel_tid}_{st.session_state['refresh_key']}", clear_on_submit=True):
-                                            e_desc = st.text_area("Description", value=str(curr['description']))
-                                            e_date = st.date_input("Date", value=v_date)
-                                            e_half = st.selectbox("Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
-                                            if st.form_submit_button("Update & Close"):
+                                    # Horizontal Buttons for Edit and Delete
+                                    col_edit, col_del = st.columns([1, 1])
+                                    
+                                    with col_edit:
+                                        with st.expander("📝 Edit Details"):
+                                            curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
+                                            try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
+                                            except: v_date = datetime.now(IST)
+                                            with st.form(f"edit_form_{sel_tid}_{st.session_state['refresh_key']}"):
+                                                e_desc = st.text_area("Description", value=str(curr['description']))
+                                                e_date = st.date_input("Date", value=v_date)
+                                                e_half = st.selectbox("Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
+                                                if st.form_submit_button("Update Task"):
+                                                    tasks_latest = load_data("tasks")
+                                                    tasks_latest.loc[tasks_latest['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, e_date.strftime("%d/%m/%Y"), e_half]
+                                                    save_data(tasks_latest, "tasks")
+                                                    st.rerun()
+
+                                    with col_del:
+                                        if not st.session_state['delete_confirm']:
+                                            if st.button("🗑️ Delete Task"):
+                                                st.session_state['delete_confirm'] = True
+                                                st.rerun()
+                                        else:
+                                            st.error("Confirm?")
+                                            if st.button("🔥 Yes"):
                                                 tasks_latest = load_data("tasks")
-                                                tasks_latest.loc[tasks_latest['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, e_date.strftime("%d/%m/%Y"), e_half]
+                                                tasks_latest = tasks_latest[tasks_latest['task_id'] != sel_tid]
                                                 save_data(tasks_latest, "tasks")
                                                 st.rerun()
-                                    
-                                    # --- DELETE TASK LOGIC ---
-                                    st.write("---")
-                                    if not st.session_state['delete_confirm']:
-                                        if st.button("🗑️ Delete This Task", key="del_btn_init"):
-                                            st.session_state['delete_confirm'] = True
-                                            st.rerun()
-                                    else:
-                                        st.error(f"⚠️ Confirm Delete {sel_tid}?")
-                                        col_a, col_b = st.columns(2)
-                                        if col_a.button("🔥 Yes, Delete Permanently"):
-                                            tasks_latest = load_data("tasks")
-                                            tasks_latest = tasks_latest[tasks_latest['task_id'] != sel_tid]
-                                            save_data(tasks_latest, "tasks")
-                                            st.rerun()
-                                        if col_b.button("❌ Cancel"):
-                                            st.session_state['delete_confirm'] = False
-                                            st.rerun()
+                                            if st.button("❌ No"):
+                                                st.session_state['delete_confirm'] = False
+                                                st.rerun()
                                                 
                                 elif f_stat == "Completed" and st.button("↩️ Re-open"):
                                     tasks_latest = load_data("tasks")
