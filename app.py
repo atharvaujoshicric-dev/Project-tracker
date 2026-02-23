@@ -2,16 +2,25 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
-import time
 
-# --- CONFIG ---
+# --- 1. SESSION STATE INITIALIZATION (Must be first) ---
+if 'logged_in' not in st.session_state:
+    st.session_state['logged_in'] = False
+if 'user' not in st.session_state:
+    st.session_state['user'] = None
+if 'role' not in st.session_state:
+    st.session_state['role'] = None
+if 'last_sync' not in st.session_state:
+    st.session_state['last_sync'] = "Never"
+
+# --- 2. CONFIG & CONNECTION ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1fUGPRxOWmew4p1iTuVQ3tUBZ2dtSb2NX1EZ2rVWKDM4/edit?usp=sharing"
 
 # Establish Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- CACHED DATA LOADING ---
+# --- 3. CACHED DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_data(tab):
     try:
@@ -24,19 +33,14 @@ def load_data(tab):
         return pd.DataFrame()
 
 def save_data(df, tab):
-    # Ensure headers are lowercase before saving
     df.columns = df.columns.str.strip().str.lower()
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
-    # Store the exact time of the update
+    # Update sync time in state
     st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
 
-# --- INITIAL STATE ---
-if 'logged_in' not in st.session_state:
-    st.session_state.update({'logged_in': False, 'user': None, 'role': None, 'last_sync': "Never"})
-
-# --- LOGIN ---
-if not st.session_state.logged_in:
+# --- 4. LOGIN LOGIC ---
+if not st.session_state['logged_in']:
     st.title("BeyondWalls Management System")
     users_df = load_data("users")
     with st.form("login"):
@@ -46,36 +50,40 @@ if not st.session_state.logged_in:
             if not users_df.empty and 'username' in users_df.columns:
                 user_match = users_df[(users_df['username'] == u) & (users_df['password'].astype(str) == str(p))]
                 if not user_match.empty:
-                    st.session_state.update({'logged_in': True, 'user': u, 'role': user_match.iloc[0]['role']})
+                    st.session_state['logged_in'] = True
+                    st.session_state['user'] = u
+                    st.session_state['role'] = user_match.iloc[0]['role']
+                    st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
                     st.rerun()
                 else: st.error("Wrong credentials")
             else: st.error("User database error.")
 else:
-    # --- SIDEBAR FOR 15-20 USERS ---
-    st.sidebar.title(f"User: {st.session_state.user}")
+    # --- 5. SIDEBAR ---
+    st.sidebar.title(f"User: {st.session_state['user']}")
     st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']}")
     
-    if st.sidebar.button("🔄 Force Refresh (New Data)"):
+    if st.sidebar.button("🔄 Force Refresh Data"):
         st.cache_data.clear()
         st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
         st.rerun()
 
     menu = ["My Tasks"]
-    if st.session_state.role == 'Admin': menu.append("Admin Control")
+    if st.session_state['role'] == 'Admin': menu.append("Admin Control")
     choice = st.sidebar.selectbox("Menu", menu)
     
     if st.sidebar.button("Logout"):
-        st.session_state.clear()
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
         st.rerun()
 
-    # --- USER: MY TASKS ---
+    # --- 6. USER: MY TASKS ---
     if choice == "My Tasks":
         st.header("Project Tasks")
         projects_df = load_data("projects")
         tasks_df = load_data("tasks")
         
         if not projects_df.empty and 'owner' in projects_df.columns:
-            my_projs = projects_df[projects_df['owner'] == st.session_state.user]
+            my_projs = projects_df[projects_df['owner'] == st.session_state['user']]
             
             if not my_projs.empty:
                 sel_p_name = st.selectbox("Select Project", my_projs['name'].tolist())
@@ -84,7 +92,6 @@ else:
                 search_query = st.text_input("🔍 Search tasks", "").lower()
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
-                # ADD TASK
                 if f_stat == "Pending":
                     with st.expander("➕ Add New Task"):
                         with st.form("new_t"):
@@ -97,7 +104,6 @@ else:
                             d_priority = st.selectbox("Priority", ["FH", "SH"])
                             
                             if st.form_submit_button("Save Task"):
-                                # Reload tasks right before saving to avoid ID collision
                                 tasks_latest = load_data("tasks")
                                 new_id = f"{cat[:3].upper()}-{len(tasks_latest)+101}"
                                 new_row = pd.DataFrame([{
@@ -108,7 +114,6 @@ else:
                                 save_data(pd.concat([tasks_latest, new_row], ignore_index=True), "tasks")
                                 st.rerun()
 
-                # VIEW & ACTION
                 if not tasks_df.empty and 'status' in tasks_df.columns:
                     view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())].copy()
                     if search_query:
@@ -122,17 +127,14 @@ else:
                         with c1:
                             if f_stat == "Pending":
                                 if st.button("✅ Mark Completed"):
-                                    # Atomic Update: Reload and update specifically this ID
                                     tasks_latest = load_data("tasks")
                                     tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'completed'
                                     save_data(tasks_latest, "tasks")
                                     st.rerun()
-                                
                                 with st.expander("📝 Edit Task"):
                                     curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
                                     try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
                                     except: v_date = datetime.now()
-                                    
                                     with st.form(f"edit_{sel_tid}"):
                                         e_desc = st.text_area("Description", value=str(curr['description']))
                                         e_date = st.date_input("Date", value=v_date)
@@ -155,7 +157,7 @@ else:
                                 st.rerun()
                 else: st.info("No tasks found.")
 
-    # --- ADMIN CONTROL ---
+    # --- 7. ADMIN CONTROL ---
     elif choice == "Admin Control":
         st.header("Admin Management")
         t1, t2, t3 = st.tabs(["Users", "Projects", "Transfer"])
@@ -167,6 +169,10 @@ else:
                 if st.form_submit_button("Create User"):
                     save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
                     st.rerun()
+            du = st.selectbox("Delete User", users_df['username'].tolist() if not users_df.empty else [])
+            if st.button("Confirm Delete"):
+                save_data(users_df[users_df['username'] != du], "users")
+                st.rerun()
         with t2:
             with st.form("add_p"):
                 pn, po = st.text_input("Project Name"), st.selectbox("Owner", users_df['username'].tolist() if not users_df.empty else [])
