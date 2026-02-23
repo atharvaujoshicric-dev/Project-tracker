@@ -9,18 +9,21 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1fUGPRxOWmew4p1iTuVQ3tUBZ2dt
 # Establish Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- CACHED DATA LOADING ---
+@st.cache_data(ttl=60)
 def load_data(tab):
     try:
         df = conn.read(spreadsheet=SHEET_URL, worksheet=tab, ttl=0)
-        # Fix: Strip spaces and lowercase headers to prevent KeyErrors
         df.columns = df.columns.str.strip().str.lower()
         return df
     except Exception as e:
-        st.error(f"Error loading tab '{tab}': {e}")
+        if "429" in str(e):
+            st.error("Google Sheets Rate Limit reached. Please wait 30 seconds.")
+        else:
+            st.error(f"Error loading tab '{tab}': {e}")
         return pd.DataFrame()
 
 def save_data(df, tab):
-    # Ensure headers are clean before saving back to Google Sheets
     df.columns = df.columns.str.strip().str.lower()
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
@@ -36,7 +39,6 @@ if 'logged_in' not in st.session_state:
 if not st.session_state.logged_in:
     st.title("BeyondWalls Management System")
     users_df = load_data("users")
-    
     with st.form("login"):
         u = st.text_input("Username").strip()
         p = st.text_input("Password", type="password").strip()
@@ -47,12 +49,18 @@ if not st.session_state.logged_in:
                     st.session_state.update({'logged_in': True, 'user': u, 'role': user_match.iloc[0]['role']})
                     st.rerun()
                 else: st.error("Wrong credentials")
-            else: st.error("User database not found or empty.")
+            else: st.error("User database error.")
 else:
     st.sidebar.title(f"User: {st.session_state.user}")
+    
+    if st.sidebar.button("🔄 Force Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
     menu = ["My Tasks"]
     if st.session_state.role == 'Admin': menu.append("Admin Control")
     choice = st.sidebar.selectbox("Menu", menu)
+    
     if st.sidebar.button("Logout"):
         st.session_state.logged_in = False
         st.rerun()
@@ -70,6 +78,8 @@ else:
                 sel_p_name = st.selectbox("Select Project", my_projs['name'].tolist())
                 sel_p_id = my_projs[my_projs['name'] == sel_p_name]['id'].iloc[0]
                 
+                # --- SEARCH & FILTERS ---
+                search_query = st.text_input("🔍 Search tasks by description or ID", "").lower()
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 # ADD TASK (Pending Only)
@@ -86,17 +96,22 @@ else:
                                     "sub_category": sub, "description": desc, "status": "pending"
                                 }])
                                 save_data(pd.concat([tasks_df, new_row], ignore_index=True), "tasks")
-                                st.success("Task Saved!")
                                 st.rerun()
 
-                # VIEW TASKS
+                # VIEW & SEARCH LOGIC
                 if not tasks_df.empty and 'status' in tasks_df.columns:
-                    # Filter and match lowercase status
                     view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())]
+                    
+                    if search_query:
+                        view_df = view_df[
+                            view_df['description'].str.lower().str.contains(search_query) | 
+                            view_df['task_id'].str.lower().str.contains(search_query)
+                        ]
+                    
                     st.dataframe(view_df, use_container_width=True)
                     
                     if not view_df.empty:
-                        sel_tid = st.selectbox("Select Task ID", view_df['task_id'].tolist())
+                        sel_tid = st.selectbox("Select Task ID to take action", view_df['task_id'].tolist())
                         c1, c2 = st.columns(2)
                         with c1:
                             if f_stat == "Pending":
@@ -104,8 +119,21 @@ else:
                                     tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'completed'
                                     save_data(tasks_df, "tasks")
                                     st.rerun()
+                                with st.expander("📝 Edit Description"):
+                                    curr_desc = tasks_df[tasks_df['task_id'] == sel_tid]['description'].values[0]
+                                    with st.form(f"edit_{sel_tid}"):
+                                        new_desc = st.text_area("New Description", value=curr_desc)
+                                        if st.form_submit_button("Update"):
+                                            tasks_df.loc[tasks_df['task_id'] == sel_tid, 'description'] = new_desc
+                                            save_data(tasks_df, "tasks")
+                                            st.rerun()
                             elif f_stat == "Completed":
                                 if st.button("↩️ Re-open"):
+                                    tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'pending'
+                                    save_data(tasks_df, "tasks")
+                                    st.rerun()
+                            elif f_stat == "Closed" and st.session_state.role == "Admin":
+                                if st.button("🔓 Admin: Unlock Task"):
                                     tasks_df.loc[tasks_df['task_id'] == sel_tid, 'status'] = 'pending'
                                     save_data(tasks_df, "tasks")
                                     st.rerun()
@@ -116,52 +144,43 @@ else:
                                     save_data(tasks_df, "tasks")
                                     st.rerun()
                 else: st.info("No tasks found.")
-            else: st.warning("No projects assigned to you.")
-        else: st.error("Project database error. Check headers.")
+            else: st.warning("No projects assigned.")
+        else: st.error("Database header error.")
 
     # --- ADMIN CONTROL ---
     elif choice == "Admin Control":
         st.header("Admin Management")
         t1, t2, t3 = st.tabs(["Manage Users", "Manage Projects", "Transfer"])
-        
         users_df = load_data("users")
         projs_df = load_data("projects")
 
-        with t1: # USERS
+        with t1:
             with st.form("add_u"):
-                nu = st.text_input("New User").strip()
-                np = st.text_input("Pass").strip()
-                nr = st.selectbox("Role", ["User", "Admin"])
+                nu, np, nr = st.text_input("New User"), st.text_input("Pass"), st.selectbox("Role", ["User", "Admin"])
                 if st.form_submit_button("Create User"):
-                    if nu in users_df['username'].values:
-                        st.error("User already exists!")
+                    if nu in users_df['username'].values: st.error("User exists!")
                     else:
-                        new_u = pd.DataFrame([{"username": nu, "password": np, "role": nr}])
-                        save_data(pd.concat([users_df, new_u], ignore_index=True), "users")
+                        save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
                         st.rerun()
-            st.divider()
             du = st.selectbox("Delete User", users_df['username'].tolist() if not users_df.empty else [])
-            if st.button("Confirm Delete User"):
+            if st.button("Confirm Delete"):
                 save_data(users_df[users_df['username'] != du], "users")
                 st.rerun()
 
-        with t2: # PROJECTS
+        with t2:
             with st.form("add_p"):
-                pn = st.text_input("Project Name").strip()
-                po = st.selectbox("Owner", users_df['username'].tolist() if not users_df.empty else [])
+                pn, po = st.text_input("Project Name"), st.selectbox("Owner", users_df['username'].tolist() if not users_df.empty else [])
                 if st.form_submit_button("Create Project"):
                     new_id = int(projs_df['id'].max() + 1) if not projs_df.empty else 1
-                    new_p = pd.DataFrame([{"id": new_id, "name": pn, "owner": po}])
-                    save_data(pd.concat([projs_df, new_p], ignore_index=True), "projects")
+                    save_data(pd.concat([projs_df, pd.DataFrame([{"id": new_id, "name": pn, "owner": po}])]), "projects")
                     st.rerun()
             st.table(projs_df)
 
-        with t3: # TRANSFER
-            st.subheader("Manual Transfer")
-            p_to_move = st.selectbox("Project", projs_df['name'].tolist() if not projs_df.empty else [])
-            new_owner = st.selectbox("New Recipient", users_df['username'].tolist() if not users_df.empty else [])
+        with t3:
+            p_move = st.selectbox("Project", projs_df['name'].tolist() if not projs_df.empty else [])
+            new_o = st.selectbox("New Recipient", users_df['username'].tolist() if not users_df.empty else [])
             if st.button("Execute Transfer"):
-                projs_df.loc[projs_df['name'] == p_to_move, 'owner'] = new_owner
+                projs_df.loc[projs_df['name'] == p_move, 'owner'] = new_o
                 save_data(projs_df, "projects")
                 st.success("Transferred!")
                 st.rerun()
