@@ -3,69 +3,50 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
 
-# --- GOOGLE SHEETS CONNECTION ---
-# Replace this URL with your shared Google Sheet link
-SQL_URL = "https://docs.google.com/spreadsheets/d/1fUGPRxOWmew4p1iTuVQ3tUBZ2dtSb2NX1EZ2rVWKDM4/edit?usp=sharing"
-
+# --- CONFIG & CONNECTION ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1fUGPRxOWmew4p1iTuVQ3tUBZ2dtSb2NX1EZ2rVWKDM4/edit?usp=sharing"
 
-# Establish connection
+# Establish Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def get_data(worksheet):
-    return conn.read(spreadsheet=SQL_URL, worksheet=worksheet)
+def load_data(worksheet):
+    return conn.read(spreadsheet=SHEET_URL, worksheet=worksheet, ttl=0)
 
-def update_data(df, worksheet):
-    conn.update(spreadsheet=SQL_URL, worksheet=worksheet, data=df)
+def save_data(df, worksheet):
+    conn.update(spreadsheet=SHEET_URL, worksheet=worksheet, data=df)
+    st.cache_data.clear()
 
-# --- INITIALIZE TABLES IF EMPTY ---
-def init_gsheets():
-    try:
-        users_df = get_data("users")
-    except:
-        users_df = pd.DataFrame([{"username": "admin", "password": "admin123", "role": "Admin"}])
-        update_data(users_df, "users")
+# --- CONSTANTS ---
+CATEGORIES = ["Design", "Copy", "Video", "PPC", "Web Dev", "Report"]
+REPORT_SUBS = ["Weekly report", "PPC report", "CP aggregation report", "Pre-Sales report", "TVA"]
 
-    try:
-        projects_df = get_data("projects")
-    except:
-        projects_df = pd.DataFrame(columns=["id", "name", "owner"])
-        update_data(projects_df, "projects")
-
-    try:
-        tasks_df = get_data("tasks")
-    except:
-        tasks_df = pd.DataFrame(columns=["task_id", "project_id", "category", "sub_category", 
-                                          "description", "deadline_date", "deadline_half", "status"])
-        update_data(tasks_df, "tasks")
-
-init_gsheets()
-# --- APP START ---
-st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
-init_db()
-
-CATEGORIES = ["Design", "Copy", "Video", "PPC", "Web Dev", "Report", "Others"]
-REPORT_SUBS = ["Weekly report", "PPC report", "CP aggregation report", "Pre-Sales report", "TVA", "Others"]
-
+# --- APP STATE ---
 if 'logged_in' not in st.session_state:
     st.session_state.update({'logged_in': False, 'user': None, 'role': None})
 
-# --- LOGIN ---
+# --- LOGIN LOGIC ---
 if not st.session_state.logged_in:
     st.title("BeyondWalls Management System")
-    with st.form("login"):
-        u, p = st.text_input("Username"), st.text_input("Password", type="password")
+    users_df = load_data("users")
+    
+    with st.form("login_form"):
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
         if st.form_submit_button("Login"):
-            res = run_query("SELECT role FROM users WHERE username=? AND password=?", (u, p), fetch=True)
-            if res:
-                st.session_state.update({'logged_in': True, 'user': u, 'role': res[0][0]})
+            user_row = users_df[(users_df['username'] == u) & (users_df['password'] == str(p))]
+            if not user_row.empty:
+                st.session_state.update({'logged_in': True, 'user': u, 'role': user_row.iloc[0]['role']})
                 st.rerun()
-            else: st.error("Invalid Credentials")
+            else:
+                st.error("Invalid Username or Password")
 else:
+    # Sidebar Navigation
     st.sidebar.title(f"User: {st.session_state.user}")
+    st.sidebar.write(f"Role: {st.session_state.role}")
     menu = ["My Tasks"]
     if st.session_state.role == 'Admin': menu.append("Admin Control")
-    choice = st.sidebar.selectbox("Menu", menu)
+    choice = st.sidebar.selectbox("Navigation", menu)
     
     if st.sidebar.button("Logout"):
         st.session_state.logged_in = False
@@ -73,20 +54,22 @@ else:
 
     # --- USER: MY TASKS ---
     if choice == "My Tasks":
-        st.header("Project Tasks")
-        my_projects = run_query("SELECT id, name FROM projects WHERE owner=?", (st.session_state.user,), fetch=True)
+        st.header("Project Management")
+        projects_df = load_data("projects")
+        tasks_df = load_data("tasks")
         
-        if my_projects:
-            proj_dict = {p[1]: p[0] for p in my_projects}
-            sel_proj_name = st.selectbox("Select Project", list(proj_dict.keys()))
-            sel_proj_id = proj_dict[sel_proj_name]
+        my_projects = projects_df[projects_df['owner'] == st.session_state.user]
+        
+        if not my_projects.empty:
+            sel_proj_name = st.selectbox("Select Project", my_projects['name'].tolist())
+            sel_proj_id = my_projects[my_projects['name'] == sel_proj_name]['id'].iloc[0]
 
             st.divider()
-            col_f1, col_f2 = st.columns(2)
-            f_cat = col_f1.multiselect("Filter by Category", CATEGORIES)
-            f_stat = col_f2.radio("View Status", ["Pending", "Completed", "Closed"], horizontal=True)
+            f1, f2 = st.columns(2)
+            f_cat = f1.multiselect("Filter Category", CATEGORIES)
+            f_stat = f2.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
-            # ADD TASK PANEL (Only for Pending)
+            # Add Task (Pending Only)
             if f_stat == "Pending":
                 with st.expander("➕ Add New Task"):
                     with st.form("new_task"):
@@ -96,110 +79,93 @@ else:
                         d_date = st.date_input("Deadline")
                         d_half = st.selectbox("Half", ["FH", "SH"])
                         if st.form_submit_button("Add Task"):
-                            prefix = cat[:3].upper()
-                            count = run_query("SELECT COUNT(*) FROM tasks", fetch=True)[0][0]
-                            unique_id = f"{prefix}-{101 + count}"
-                            run_query("INSERT INTO tasks VALUES (?,?,?,?,?,?,?,?)", 
-                                      (unique_id, sel_proj_id, cat, sub_cat, desc, d_date, d_half, "Pending"))
-                            st.success(f"Task {unique_id} added!")
+                            new_id = f"{cat[:3].upper()}-{len(tasks_df)+101}"
+                            new_row = pd.DataFrame([{
+                                "task_id": new_id, "project_id": sel_proj_id, "category": cat,
+                                "sub_category": sub_cat, "description": desc, "deadline_date": str(d_date),
+                                "deadline_half": d_half, "status": "Pending"
+                            }])
+                            tasks_df = pd.concat([tasks_df, new_row], ignore_index=True)
+                            save_data(tasks_df, "tasks")
+                            st.success(f"Task {new_id} added to Google Sheets!")
                             st.rerun()
 
+            # View & Action
             st.subheader(f"{f_stat} Tasks")
-            query = "SELECT task_id, category, sub_category, description, deadline_date, deadline_half FROM tasks WHERE project_id=? AND status=?"
-            params = [sel_proj_id, f_stat]
+            view_df = tasks_df[(tasks_df['project_id'] == sel_proj_id) & (tasks_df['status'] == f_stat)]
             if f_cat:
-                query += f" AND category IN ({','.join(['?']*len(f_cat))})"
-                params.extend(f_cat)
+                view_df = view_df[view_df['category'].isin(f_cat)]
             
-            tasks = run_query(query, tuple(params), fetch=True)
-            if tasks:
-                df = pd.DataFrame(tasks, columns=["ID", "Category", "Sub-Cat", "Description", "Deadline", "Half"])
-                st.dataframe(df, use_container_width=True)
+            if not view_df.empty:
+                st.dataframe(view_df, use_container_width=True)
+                sel_task_id = st.selectbox("Select Task ID:", view_df['task_id'].tolist())
                 
-                # ACTION SECTION (Hidden for Closed)
-                if f_stat != "Closed":
-                    sel_task_id = st.selectbox("Select Task ID to take action:", df["ID"])
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if f_stat == "Pending":
-                            if st.button("✅ Mark Completed"):
-                                run_query("UPDATE tasks SET status='Completed' WHERE task_id=?", (sel_task_id,))
-                                st.rerun()
-                            with st.expander(f"📝 Edit Task {sel_task_id}"):
-                                curr = run_query("SELECT category, sub_category, description, deadline_date, deadline_half FROM tasks WHERE task_id=?", (sel_task_id,), fetch=True)[0]
-                                with st.form(f"edit_{sel_task_id}"):
-                                    e_cat = st.selectbox("Cat", CATEGORIES, index=CATEGORIES.index(curr[0]))
-                                    e_sub = st.selectbox("Sub", REPORT_SUBS, index=REPORT_SUBS.index(curr[1]) if curr[1] in REPORT_SUBS else 0) if e_cat=="Report" else ""
-                                    e_desc = st.text_area("Desc", value=curr[2])
-                                    e_date = st.date_input("Date", value=pd.to_datetime(curr[3]))
-                                    e_half = st.selectbox("Half", ["FH", "SH"], index=0 if curr[4]=="FH" else 1)
-                                    if st.form_submit_button("Save"):
-                                        run_query("UPDATE tasks SET category=?, sub_category=?, description=?, deadline_date=?, deadline_half=? WHERE task_id=?", 
-                                                  (e_cat, e_sub, e_desc, e_date, e_half, sel_task_id))
-                                        st.rerun()
-                        elif f_stat == "Completed":
-                            if st.button("↩️ Re-open to Pending"):
-                                run_query("UPDATE tasks SET status='Pending' WHERE task_id=?", (sel_task_id,))
-                                st.rerun()
-                    with c2:
-                        if st.button("📁 Move to Closed"):
-                            run_query("UPDATE tasks SET status='Closed' WHERE task_id=?", (sel_task_id,))
-                            st.warning("Task is now Archived and Locked.")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if f_stat == "Pending":
+                        if st.button("✅ Mark Completed"):
+                            tasks_df.loc[tasks_df['task_id'] == sel_task_id, 'status'] = 'Completed'
+                            save_data(tasks_df, "tasks")
                             st.rerun()
-                else:
-                    st.info("Archive View: Closed tasks cannot be edited, re-opened, or deleted.")
-            else: st.info(f"No {f_stat.lower()} tasks.")
-        else: st.warning("No projects assigned.")
+                    elif f_stat == "Completed":
+                        if st.button("↩️ Re-open"):
+                            tasks_df.loc[tasks_df['task_id'] == sel_task_id, 'status'] = 'Pending'
+                            save_data(tasks_df, "tasks")
+                            st.rerun()
+                    elif f_stat == "Closed" and st.session_state.role == "Admin":
+                        if st.button("🔓 Admin: Unlock Task"):
+                            tasks_df.loc[tasks_df['task_id'] == sel_task_id, 'status'] = 'Pending'
+                            save_data(tasks_df, "tasks")
+                            st.rerun()
+                
+                with c2:
+                    if f_stat != "Closed":
+                        if st.button("📁 Move to Closed"):
+                            tasks_df.loc[tasks_df['task_id'] == sel_task_id, 'status'] = 'Closed'
+                            save_data(tasks_df, "tasks")
+                            st.rerun()
+            else: st.info(f"No {f_stat.lower()} tasks found.")
+        else: st.warning("No projects assigned to you.")
 
     # --- ADMIN CONTROL ---
     elif choice == "Admin Control":
-        st.header("Admin Management Dashboard")
-        t1, t2, t3 = st.tabs(["Manage Users", "Manage Projects", "Manual Transfer"])
-        all_users = [u[0] for u in run_query("SELECT username FROM users", fetch=True)]
+        st.header("Admin Management")
+        t1, t2, t3 = st.tabs(["Users", "Projects", "Transfer"])
+        
+        users_df = load_data("users")
+        projects_df = load_data("projects")
 
-        with t1:
-            st.subheader("Add User")
-            with st.form("ad_u"):
-                nu, np = st.text_input("Username"), st.text_input("Password", type="password")
-                nr = st.selectbox("Role", ["User", "Admin"])
-                if st.form_submit_button("Create"):
-                    try: run_query("INSERT INTO users VALUES (?,?,?)", (nu, np, nr)); st.success("Created!"); st.rerun()
-                    except: st.error("Exists")
+        with t1: # User Management
+            with st.form("add_u"):
+                nu, np, nr = st.text_input("Username"), st.text_input("Password"), st.selectbox("Role", ["User", "Admin"])
+                if st.form_submit_button("Create User"):
+                    new_u = pd.DataFrame([{"username": nu, "password": np, "role": nr}])
+                    save_data(pd.concat([users_df, new_u], ignore_index=True), "users")
+                    st.rerun()
+            
             st.divider()
-            du = st.selectbox("Delete User", all_users)
-            user_projs = run_query("SELECT id FROM projects WHERE owner=?", (du,), fetch=True)
-            if user_projs:
-                successor = st.selectbox("Transfer projects to:", [u for u in all_users if u != du])
-                if st.button("Transfer & Delete"):
-                    run_query("UPDATE projects SET owner=? WHERE owner=?", (successor, du))
-                    run_query("DELETE FROM users WHERE username=?", (du,))
-                    st.rerun()
-            else:
-                if st.button("Confirm Delete"): run_query("DELETE FROM users WHERE username=?", (du,)); st.rerun()
+            du = st.selectbox("Delete User", users_df['username'].tolist())
+            if st.button("Delete User"):
+                # Simplified delete for GSheets
+                save_data(users_df[users_df['username'] != du], "users")
+                st.rerun()
 
-        with t2:
-            st.subheader("Create Project")
-            with st.form("ad_p"):
-                pn, po = st.text_input("Project Name"), st.selectbox("Assign to", all_users)
-                if st.form_submit_button("Create"): run_query("INSERT INTO projects (name, owner) VALUES (?,?)", (pn, po)); st.rerun()
-            st.divider()
-            all_p = run_query("SELECT * FROM projects", fetch=True)
-            if all_p:
-                pdf = pd.DataFrame(all_p, columns=["ID", "Name", "Owner"])
-                st.table(pdf)
-                dp = st.selectbox("Delete Project ID", pdf["ID"])
-                if st.button("Delete Project & Tasks"):
-                    run_query("DELETE FROM projects WHERE id=?", (dp,))
-                    run_query("DELETE FROM tasks WHERE project_id=?", (dp,))
+        with t2: # Project Management
+            with st.form("add_p"):
+                p_name = st.text_input("Project Name")
+                p_owner = st.selectbox("Owner", users_df['username'].tolist())
+                if st.form_submit_button("Create Project"):
+                    new_p = pd.DataFrame([{"id": len(projects_df)+1, "name": p_name, "owner": p_owner}])
+                    save_data(pd.concat([projects_df, new_p], ignore_index=True), "projects")
                     st.rerun()
+            
+            st.table(projects_df)
 
-        with t3:
-            st.subheader("Manual Transfer")
-            all_p_data = run_query("SELECT id, name, owner FROM projects", fetch=True)
-            if all_p_data:
-                proj_list = [f"{p[0]} - {p[1]} (Owner: {p[2]})" for p in all_p_data]
-                sel_p = st.selectbox("Project", proj_list)
-                target = st.selectbox("Recipient", all_users)
-                if st.button("Transfer"):
-                    run_query("UPDATE projects SET owner=? WHERE id=?", (target, sel_p.split(" - ")[0]))
-                    st.rerun()
+        with t3: # Transfer
+            st.subheader("Manual Project Transfer")
+            p_to_move = st.selectbox("Project", projects_df['name'].tolist())
+            new_recipient = st.selectbox("New Owner", users_df['username'].tolist())
+            if st.button("Transfer Now"):
+                projects_df.loc[projects_df['name'] == p_to_move, 'owner'] = new_recipient
+                save_data(projects_df, "projects")
+                st.success("Transferred!")
