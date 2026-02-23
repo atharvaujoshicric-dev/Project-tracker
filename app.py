@@ -2,8 +2,15 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import pytz  # For Indian Timezone
 
-# --- 1. SESSION STATE INITIALIZATION (Must be first) ---
+# --- 1. TIMEZONE SETUP ---
+IST = pytz.timezone('Asia/Kolkata')
+
+def get_ist_time():
+    return datetime.now(IST).strftime("%I:%M:%S %p")
+
+# --- 2. SESSION STATE INITIALIZATION ---
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 if 'user' not in st.session_state:
@@ -13,14 +20,13 @@ if 'role' not in st.session_state:
 if 'last_sync' not in st.session_state:
     st.session_state['last_sync'] = "Never"
 
-# --- 2. CONFIG & CONNECTION ---
+# --- 3. CONFIG & CONNECTION ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1fUGPRxOWmew4p1iTuVQ3tUBZ2dtSb2NX1EZ2rVWKDM4/edit?usp=sharing"
 
-# Establish Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- 3. CACHED DATA LOADING ---
+# --- 4. CACHED DATA LOADING ---
 @st.cache_data(ttl=60)
 def load_data(tab):
     try:
@@ -36,10 +42,10 @@ def save_data(df, tab):
     df.columns = df.columns.str.strip().str.lower()
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
-    # Update sync time in state
-    st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
+    # Update sync time using IST
+    st.session_state['last_sync'] = get_ist_time()
 
-# --- 4. LOGIN LOGIC ---
+# --- 5. LOGIN LOGIC ---
 if not st.session_state['logged_in']:
     st.title("BeyondWalls Management System")
     users_df = load_data("users")
@@ -53,18 +59,18 @@ if not st.session_state['logged_in']:
                     st.session_state['logged_in'] = True
                     st.session_state['user'] = u
                     st.session_state['role'] = user_match.iloc[0]['role']
-                    st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
+                    st.session_state['last_sync'] = get_ist_time()
                     st.rerun()
                 else: st.error("Wrong credentials")
             else: st.error("User database error.")
 else:
-    # --- 5. SIDEBAR ---
+    # --- 6. SIDEBAR ---
     st.sidebar.title(f"User: {st.session_state['user']}")
-    st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']}")
+    st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']} (IST)")
     
     if st.sidebar.button("🔄 Refresh Data"):
         st.cache_data.clear()
-        st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
+        st.session_state['last_sync'] = get_ist_time()
         st.rerun()
 
     menu = ["My Tasks"]
@@ -76,7 +82,7 @@ else:
             del st.session_state[key]
         st.rerun()
 
-    # --- 6. USER: MY TASKS ---
+    # --- 7. USER: MY TASKS ---
     if choice == "My Tasks":
         st.header("Project Tasks")
         projects_df = load_data("projects")
@@ -100,7 +106,7 @@ else:
                             cat = st.selectbox("Category", CATEGORIES)
                             sub = st.selectbox("Report Type", SUBS) if cat == "Report" else ""
                             desc = st.text_area("Description")
-                            d_date = st.date_input("Deadline Date", datetime.now())
+                            d_date = st.date_input("Deadline Date", datetime.now(IST))
                             d_priority = st.selectbox("Priority", ["FH", "SH"])
                             
                             if st.form_submit_button("Save Task"):
@@ -134,7 +140,7 @@ else:
                                 with st.expander("📝 Edit Task"):
                                     curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
                                     try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
-                                    except: v_date = datetime.now()
+                                    except: v_date = datetime.now(IST)
                                     with st.form(f"edit_{sel_tid}"):
                                         e_desc = st.text_area("Description", value=str(curr['description']))
                                         e_date = st.date_input("Date", value=v_date)
@@ -157,7 +163,7 @@ else:
                                 st.rerun()
                 else: st.info("No tasks found.")
 
-    # --- 7. ADMIN CONTROL ---
+    # --- 8. ADMIN CONTROL ---
     elif choice == "Admin Control":
         st.header("Admin Management")
         t1, t2, t3 = st.tabs(["Users", "Projects", "Transfer"])
