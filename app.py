@@ -82,12 +82,11 @@ else:
                 search_query = st.text_input("🔍 Search tasks", "").lower()
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
-                # ADD TASK (Pending Only)
+                # ADD TASK
                 if f_stat == "Pending":
                     with st.expander("➕ Add New Task"):
                         with st.form("new_t"):
                             cat = st.selectbox("Category", CATEGORIES)
-                            # Sub-category only shows for Reports
                             sub = st.selectbox("Report Type", REPORT_SUBS) if cat == "Report" else ""
                             desc = st.text_area("Description")
                             d_date = st.date_input("Deadline Date", datetime.now())
@@ -103,12 +102,12 @@ else:
                                 save_data(pd.concat([tasks_df, new_row], ignore_index=True), "tasks")
                                 st.rerun()
 
-                # VIEW & SEARCH LOGIC
+                # VIEW & SEARCH
                 if not tasks_df.empty and 'status' in tasks_df.columns:
                     view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())]
                     
                     if search_query:
-                        view_df = view_df[view_df['description'].str.lower().str.contains(search_query) | view_df['task_id'].str.lower().str.contains(search_query)]
+                        view_df = view_df[view_df['description'].astype(str).str.lower().str.contains(search_query) | view_df['task_id'].astype(str).str.lower().str.contains(search_query)]
                     
                     st.dataframe(view_df, use_container_width=True)
                     
@@ -124,10 +123,18 @@ else:
                                 
                                 with st.expander("📝 Edit Task"):
                                     curr = tasks_df[tasks_df['task_id'] == sel_tid].iloc[0]
+                                    
+                                    # SAFETY CHECK FOR DATE
+                                    try:
+                                        valid_date = pd.to_datetime(curr['deadline_date'])
+                                        if pd.isna(valid_date): valid_date = datetime.now()
+                                    except:
+                                        valid_date = datetime.now()
+
                                     with st.form(f"edit_{sel_tid}"):
-                                        e_desc = st.text_area("Edit Description", value=curr['description'])
-                                        e_date = st.date_input("Edit Date", value=pd.to_datetime(curr['deadline_date']))
-                                        e_half = st.selectbox("Edit Priority", ["FH", "SH"], index=0 if curr['deadline_half'] == "FH" else 1)
+                                        e_desc = st.text_area("Edit Description", value=str(curr['description']))
+                                        e_date = st.date_input("Edit Date", value=valid_date)
+                                        e_half = st.selectbox("Edit Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
                                         if st.form_submit_button("Update"):
                                             tasks_df.loc[tasks_df['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, str(e_date), e_half]
                                             save_data(tasks_df, "tasks")
@@ -160,7 +167,7 @@ else:
             with st.form("add_u"):
                 nu, np, nr = st.text_input("New User"), st.text_input("Pass"), st.selectbox("Role", ["User", "Admin"])
                 if st.form_submit_button("Create User"):
-                    if nu in users_df['username'].values: st.error("User exists!")
+                    if not users_df.empty and nu in users_df['username'].values: st.error("User exists!")
                     else:
                         save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
                         st.rerun()
