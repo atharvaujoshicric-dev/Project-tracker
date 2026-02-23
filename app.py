@@ -23,6 +23,13 @@ if 'delete_confirm' not in st.session_state:
     st.session_state['delete_confirm'] = False
 if 'show_add_form' not in st.session_state:
     st.session_state['show_add_form'] = False
+# Admin Confirmation States
+if 'admin_del_user_confirm' not in st.session_state:
+    st.session_state['admin_del_user_confirm'] = False
+if 'admin_del_proj_confirm' not in st.session_state:
+    st.session_state['admin_del_proj_confirm'] = False
+if 'admin_transfer_confirm' not in st.session_state:
+    st.session_state['admin_transfer_confirm'] = False
 
 # --- 3. CONFIG & CONNECTION ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
@@ -100,7 +107,6 @@ else:
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 if f_stat == "Pending":
-                    # Form Toggle
                     if not st.session_state['show_add_form']:
                         if st.button("➕ Add New Task"):
                             st.session_state['show_add_form'] = True
@@ -120,24 +126,9 @@ else:
                             if st.form_submit_button("Save Task"):
                                 tasks_latest = load_data("tasks")
                                 cat_prefix = cat[:3].upper()
-                                
-                                # PROJECT + CATEGORY SPECIFIC COUNT
-                                if not tasks_latest.empty:
-                                    # Filter for current project AND current category
-                                    match_tasks = tasks_latest[
-                                        (tasks_latest['project_id'].astype(str) == str(sel_p_id)) & 
-                                        (tasks_latest['category'].str.lower() == cat.lower())
-                                    ]
-                                    new_count = 101 + len(match_tasks)
-                                else:
-                                    new_count = 101
-                                
-                                new_id = f"{cat_prefix}-{new_count}"
-                                new_row = pd.DataFrame([{
-                                    "task_id": new_id, "project_id": sel_p_id, "category": cat,
-                                    "sub_category": sub, "description": desc, "status": "pending",
-                                    "deadline_date": d_date.strftime("%d/%m/%Y"), "deadline_half": d_priority
-                                }])
+                                match_tasks = tasks_latest[(tasks_latest['project_id'].astype(str) == str(sel_p_id)) & (tasks_latest['category'].str.lower() == cat.lower())] if not tasks_latest.empty else []
+                                new_id = f"{cat_prefix}-{101 + len(match_tasks)}"
+                                new_row = pd.DataFrame([{"task_id": new_id, "project_id": sel_p_id, "category": cat, "sub_category": sub, "description": desc, "status": "pending", "deadline_date": d_date.strftime("%d/%m/%Y"), "deadline_half": d_priority}])
                                 save_data(pd.concat([tasks_latest, new_row], ignore_index=True), "tasks")
                                 st.rerun()
 
@@ -147,7 +138,6 @@ else:
                     
                     if not view_df.empty:
                         sel_tid = st.selectbox("Select Task ID to Action", ["Select ID"] + view_df['task_id'].tolist())
-                        
                         if sel_tid != "Select ID":
                             c1, c2 = st.columns(2)
                             with c1:
@@ -157,7 +147,6 @@ else:
                                         tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'completed'
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
-                                    
                                     with st.expander("📝 Edit Task Details"):
                                         curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
                                         try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
@@ -171,7 +160,6 @@ else:
                                                 tasks_latest.loc[tasks_latest['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, e_date.strftime("%d/%m/%Y"), e_half]
                                                 save_data(tasks_latest, "tasks")
                                                 st.rerun()
-                                                
                             with c2:
                                 if f_stat != "Closed":
                                     if st.button("📁 Move to Closed"):
@@ -179,7 +167,6 @@ else:
                                         tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'closed'
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
-                                    
                                     if f_stat == "Pending":
                                         st.divider()
                                         if not st.session_state['delete_confirm']:
@@ -188,9 +175,8 @@ else:
                                                 st.rerun()
                                         else:
                                             st.error("Confirm Delete?")
-                                            if st.button("🔥 Yes, Delete"):
+                                            if st.button("🔥 Yes, Delete Task"):
                                                 tasks_latest = load_data("tasks")
-                                                # Filter out the selected task
                                                 tasks_latest = tasks_latest[tasks_latest['task_id'] != sel_tid]
                                                 save_data(tasks_latest, "tasks")
                                                 st.rerun()
@@ -202,27 +188,78 @@ else:
     # --- 8. ADMIN CONTROL ---
     elif choice == "Admin Control":
         st.header("Admin Management")
-        t1, t2, t3 = st.tabs(["Users", "Projects", "Transfer"])
+        t1, t2, t3 = st.tabs(["Manage Users", "Manage Projects", "Transfer Project"])
         users_df, projs_df = load_data("users"), load_data("projects")
 
         with t1:
+            st.subheader("Add / Delete Users")
             with st.form("add_u"):
                 nu, np, nr = st.text_input("New User"), st.text_input("Pass"), st.selectbox("Role", ["User", "Admin"])
                 if st.form_submit_button("Create User"):
                     save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
                     st.rerun()
+            st.divider()
+            du = st.selectbox("Select User to Delete", users_df['username'].tolist() if not users_df.empty else [])
+            if not st.session_state['admin_del_user_confirm']:
+                if st.button("🗑️ Delete User"):
+                    # Check if user has projects
+                    user_projects = projs_df[projs_df['owner'] == du]
+                    if not user_projects.empty:
+                        st.warning(f"⚠️ {du} still owns {len(user_projects)} projects. Please transfer or delete those projects first.")
+                    else:
+                        st.session_state['admin_del_user_confirm'] = True
+                        st.rerun()
+            else:
+                st.error(f"Confirm deleting user {du}?")
+                if st.button("🔥 Confirm User Delete"):
+                    save_data(users_df[users_df['username'] != du], "users")
+                    st.session_state['admin_del_user_confirm'] = False
+                    st.rerun()
+                if st.button("❌ Cancel Deletion"):
+                    st.session_state['admin_del_user_confirm'] = False
+                    st.rerun()
+
         with t2:
+            st.subheader("Add / Delete Projects")
             with st.form("add_p"):
                 pn, po = st.text_input("Project Name"), st.selectbox("Owner", users_df['username'].tolist() if not users_df.empty else [])
                 if st.form_submit_button("Create Project"):
                     new_id = int(projs_df['id'].max() + 1) if not projs_df.empty else 1
                     save_data(pd.concat([projs_df, pd.DataFrame([{"id": new_id, "name": pn, "owner": po}])]), "projects")
                     st.rerun()
+            st.divider()
+            dp = st.selectbox("Select Project to Delete", projs_df['name'].tolist() if not projs_df.empty else [])
+            if not st.session_state['admin_del_proj_confirm']:
+                if st.button("🗑️ Delete Project"):
+                    st.session_state['admin_del_proj_confirm'] = True
+                    st.rerun()
+            else:
+                st.error(f"Confirm deleting project '{dp}'? This will not delete the tasks.")
+                if st.button("🔥 Confirm Project Delete"):
+                    save_data(projs_df[projs_df['name'] != dp], "projects")
+                    st.session_state['admin_del_proj_confirm'] = False
+                    st.rerun()
+                if st.button("❌ Cancel Project Deletion"):
+                    st.session_state['admin_del_proj_confirm'] = False
+                    st.rerun()
             st.table(projs_df)
+
         with t3:
-            p_move = st.selectbox("Project", projs_df['name'].tolist() if not projs_df.empty else [])
-            new_o = st.selectbox("New Owner", users_df['username'].tolist() if not users_df.empty else [])
-            if st.button("Transfer"):
-                projs_df.loc[projs_df['name'] == p_move, 'owner'] = new_o
-                save_data(projs_df, "projects")
-                st.rerun()
+            st.subheader("Transfer Project Ownership")
+            p_to_move = st.selectbox("Select Project", projs_df['name'].tolist() if not projs_df.empty else [])
+            new_owner = st.selectbox("Select New Owner", users_df['username'].tolist() if not users_df.empty else [])
+            
+            if not st.session_state['admin_transfer_confirm']:
+                if st.button("🔄 Initiate Transfer"):
+                    st.session_state['admin_transfer_confirm'] = True
+                    st.rerun()
+            else:
+                st.warning(f"Are you sure you want to transfer '{p_to_move}' to {new_owner}?")
+                if st.button("✅ Confirm Transfer"):
+                    projs_df.loc[projs_df['name'] == p_to_move, 'owner'] = new_owner
+                    save_data(projs_df, "projects")
+                    st.session_state['admin_transfer_confirm'] = False
+                    st.rerun()
+                if st.button("❌ Cancel Transfer"):
+                    st.session_state['admin_transfer_confirm'] = False
+                    st.rerun()
