@@ -65,7 +65,7 @@ if not st.session_state['logged_in']:
 else:
     # --- 6. SIDEBAR ---
     st.sidebar.title(f"User: {st.session_state['user']}")
-    st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']}")
+    st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']} (IST)")
     
     if st.sidebar.button("🔄 Force Refresh Data"):
         st.cache_data.clear()
