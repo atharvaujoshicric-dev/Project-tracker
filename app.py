@@ -21,8 +21,8 @@ if 'last_sync' not in st.session_state:
     st.session_state['last_sync'] = "Never"
 if 'delete_confirm' not in st.session_state:
     st.session_state['delete_confirm'] = False
-if 'refresh_key' not in st.session_state:
-    st.session_state['refresh_key'] = 0
+if 'show_add_form' not in st.session_state:
+    st.session_state['show_add_form'] = False
 
 # --- 3. CONFIG & CONNECTION ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
@@ -38,8 +38,6 @@ def load_data(tab):
         df.columns = df.columns.str.strip().str.lower()
         return df
     except Exception as e:
-        if "429" in str(e):
-            st.error("Google Sheets is busy. Wait 15 seconds and Refresh.")
         return pd.DataFrame()
 
 def save_data(df, tab):
@@ -47,7 +45,7 @@ def save_data(df, tab):
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
     st.session_state['last_sync'] = get_ist_time()
-    st.session_state['refresh_key'] += 1 # This forces the UI reset
+    st.session_state['show_add_form'] = False  # Force collapse
     st.session_state['delete_confirm'] = False
 
 # --- 5. LOGIN LOGIC ---
@@ -67,7 +65,6 @@ if not st.session_state['logged_in']:
                     st.session_state['last_sync'] = get_ist_time()
                     st.rerun()
                 else: st.error("Wrong credentials")
-            else: st.error("User database error.")
 else:
     # --- 6. SIDEBAR ---
     st.sidebar.title(f"User: {st.session_state['user']}")
@@ -83,8 +80,7 @@ else:
     choice = st.sidebar.selectbox("Menu", menu)
     
     if st.sidebar.button("Logout"):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
+        st.session_state.clear()
         st.rerun()
 
     # --- 7. USER: MY TASKS ---
@@ -100,13 +96,20 @@ else:
                 sel_p_name = st.selectbox("Select Project", my_projs['name'].tolist())
                 sel_p_id = my_projs[my_projs['name'] == sel_p_name]['id'].iloc[0]
                 
-                search_query = st.text_input("🔍 Search tasks", "").lower()
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 if f_stat == "Pending":
-                    # KEY-SWITCH: The refresh_key in the label/key forces it to collapse on save
-                    with st.expander(f"➕ Add New Task", expanded=False):
-                        with st.form(f"new_t_{st.session_state['refresh_key']}", clear_on_submit=True):
+                    # REPLACED EXPANDER WITH BUTTON TOGGLE FOR 100% RELIABILITY
+                    if not st.session_state['show_add_form']:
+                        if st.button("➕ Add New Task"):
+                            st.session_state['show_add_form'] = True
+                            st.rerun()
+                    else:
+                        if st.button("➖ Cancel / Close Form"):
+                            st.session_state['show_add_form'] = False
+                            st.rerun()
+                        
+                        with st.form("new_task_form", clear_on_submit=True):
                             cat = st.selectbox("Category", ["Design", "Copy", "Video", "PPC", "Web Dev", "Report", "Others"])
                             sub = st.selectbox("Report Type", ["Weekly report", "PPC report", "CP aggregation report", "Pre-Sales report", "TVA", "Others"]) if cat == "Report" else ""
                             desc = st.text_area("Description")
@@ -117,13 +120,9 @@ else:
                                 tasks_latest = load_data("tasks")
                                 cat_prefix = cat[:3].upper()
                                 # Category-specific counting
-                                if not tasks_latest.empty and 'category' in tasks_latest.columns:
-                                    cat_tasks = tasks_latest[tasks_latest['category'].str.lower() == cat.lower()]
-                                    new_count = 101 + len(cat_tasks)
-                                else:
-                                    new_count = 101
+                                cat_tasks = tasks_latest[tasks_latest['category'].str.lower() == cat.lower()] if not tasks_latest.empty else []
+                                new_id = f"{cat_prefix}-{101 + len(cat_tasks)}"
                                 
-                                new_id = f"{cat_prefix}-{new_count}"
                                 new_row = pd.DataFrame([{
                                     "task_id": new_id, "project_id": sel_p_id, "category": cat,
                                     "sub_category": sub, "description": desc, "status": "pending",
@@ -134,14 +133,10 @@ else:
 
                 if not tasks_df.empty and 'status' in tasks_df.columns:
                     view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())].copy()
-                    if search_query:
-                        view_df = view_df[view_df['description'].astype(str).str.lower().str.contains(search_query)]
-                    
                     st.dataframe(view_df, use_container_width=True)
                     
                     if not view_df.empty:
-                        # Resetting Select ID dropdown key forces the edit section to close
-                        sel_tid = st.selectbox("Select Task ID to Action", ["Select ID"] + view_df['task_id'].tolist(), key=f"sel_id_{st.session_state['refresh_key']}")
+                        sel_tid = st.selectbox("Select Task ID to Action", ["Select ID"] + view_df['task_id'].tolist())
                         
                         if sel_tid != "Select ID":
                             c1, c2 = st.columns(2)
@@ -153,26 +148,21 @@ else:
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
                                     
-                                    with st.expander("📝 Edit Task Details", expanded=False):
+                                    # EDIT FORM (Also logic-based toggle)
+                                    with st.expander("📝 Edit Task Details"):
                                         curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
                                         try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
                                         except: v_date = datetime.now(IST)
-                                        
-                                        with st.form(f"ed_{sel_tid}_{st.session_state['refresh_key']}", clear_on_submit=True):
+                                        with st.form(f"edit_{sel_tid}"):
                                             e_desc = st.text_area("Description", value=str(curr['description']))
                                             e_date = st.date_input("Date", value=v_date)
                                             e_half = st.selectbox("Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
-                                            if st.form_submit_button("Update Task"):
+                                            if st.form_submit_button("Update"):
                                                 tasks_latest = load_data("tasks")
                                                 tasks_latest.loc[tasks_latest['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, e_date.strftime("%d/%m/%Y"), e_half]
                                                 save_data(tasks_latest, "tasks")
                                                 st.rerun()
                                                 
-                                elif f_stat == "Completed" and st.button("↩️ Re-open"):
-                                    tasks_latest = load_data("tasks")
-                                    tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'pending'
-                                    save_data(tasks_latest, "tasks")
-                                    st.rerun()
                             with c2:
                                 if f_stat != "Closed":
                                     if st.button("📁 Move to Closed"):
@@ -181,21 +171,20 @@ else:
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
                                     
-                                    # DELETE BUTTON PLACEMENT
                                     if f_stat == "Pending":
-                                        st.write("---")
+                                        st.divider()
                                         if not st.session_state['delete_confirm']:
-                                            if st.button("🗑️ Delete Task", key=f"del_btn_{st.session_state['refresh_key']}"):
+                                            if st.button("🗑️ Delete Task"):
                                                 st.session_state['delete_confirm'] = True
                                                 st.rerun()
                                         else:
-                                            st.error("⚠️ Confirm Delete?")
-                                            if st.button("🔥 Yes, Delete", key=f"conf_del_{st.session_state['refresh_key']}"):
+                                            st.error("Confirm Delete?")
+                                            if st.button("🔥 Yes, Delete"):
                                                 tasks_latest = load_data("tasks")
                                                 tasks_latest = tasks_latest[tasks_latest['task_id'] != sel_tid]
                                                 save_data(tasks_latest, "tasks")
                                                 st.rerun()
-                                            if st.button("❌ Cancel", key=f"canc_del_{st.session_state['refresh_key']}"):
+                                            if st.button("❌ Cancel"):
                                                 st.session_state['delete_confirm'] = False
                                                 st.rerun()
                 else: st.info("No tasks found.")
@@ -207,13 +196,13 @@ else:
         users_df, projs_df = load_data("users"), load_data("projects")
 
         with t1:
-            with st.form(f"ad_u_{st.session_state['refresh_key']}", clear_on_submit=True):
+            with st.form("add_u"):
                 nu, np, nr = st.text_input("New User"), st.text_input("Pass"), st.selectbox("Role", ["User", "Admin"])
                 if st.form_submit_button("Create User"):
                     save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
                     st.rerun()
         with t2:
-            with st.form(f"ad_p_{st.session_state['refresh_key']}", clear_on_submit=True):
+            with st.form("add_p"):
                 pn, po = st.text_input("Project Name"), st.selectbox("Owner", users_df['username'].tolist() if not users_df.empty else [])
                 if st.form_submit_button("Create Project"):
                     new_id = int(projs_df['id'].max() + 1) if not projs_df.empty else 1
