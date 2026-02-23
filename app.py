@@ -83,29 +83,70 @@ else:
                     st.rerun()
 
     # --- ADMIN CONTROL (RETORED) ---
+   # --- ADMIN CONTROL ---
     elif choice == "Admin Control":
-        st.header("Admin Dashboard")
+        st.header("Admin Management Dashboard")
         t1, t2, t3 = st.tabs(["Manage Users", "Manage Projects", "Transfer"])
         
         users_df = load_data("users")
         projs_df = load_data("projects")
 
-        with t1: # Users
+        with t1: # User Management
+            st.subheader("Add New User")
             with st.form("add_u"):
-                nu, np, nr = st.text_input("New User"), st.text_input("Pass"), st.selectbox("Role", ["User", "Admin"])
-                if st.form_submit_button("Create"):
-                    save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
+                nu = st.text_input("New Username").strip()
+                np = st.text_input("Password").strip()
+                nr = st.selectbox("Role", ["User", "Admin"])
+                
+                if st.form_submit_button("Create User"):
+                    if nu == "" or np == "":
+                        st.error("Username and Password cannot be empty.")
+                    # DUPLICATE CHECK HERE
+                    elif nu in users_df['username'].values:
+                        st.warning(f"User '{nu}' already exists! Use a different name.")
+                    else:
+                        new_u_row = pd.DataFrame([{"username": nu, "password": np, "role": nr}])
+                        save_data(pd.concat([users_df, new_u_row], ignore_index=True), "users")
+                        st.success(f"User {nu} created successfully!")
+                        st.rerun()
+            
+            st.divider()
+            st.subheader("Current Users")
+            st.dataframe(users_df[['username', 'role']], use_container_width=True)
+            
+            du = st.selectbox("Select User to Delete", users_df['username'].tolist())
+            if st.button("Delete User"):
+                if du == 'admin':
+                    st.error("Safety: Cannot delete the primary admin account.")
+                else:
+                    save_data(users_df[users_df['username'] != du], "users")
+                    st.success(f"User {du} removed.")
                     st.rerun()
-        
-        with t2: # Projects
+
+        with t2: # Project Management
+            st.subheader("Create & Assign Project")
             with st.form("add_p"):
-                pn, po = st.text_input("Project Name"), st.selectbox("Owner", users_df['username'].tolist())
+                pn = st.text_input("Project Name (e.g., Raju Kalate)").strip()
+                po = st.selectbox("Owner", users_df['username'].tolist())
+                
                 if st.form_submit_button("Create Project"):
-                    save_data(pd.concat([projs_df, pd.DataFrame([{"id": len(projs_df)+1, "name": pn, "owner": po}])]), "projects")
-                    st.rerun()
+                    if pn == "":
+                        st.error("Project name cannot be empty.")
+                    # DUPLICATE CHECK FOR PROJECTS
+                    elif pn in projs_df['name'].values:
+                        st.warning(f"Project '{pn}' already exists.")
+                    else:
+                        new_p_id = int(projs_df['id'].max() + 1) if not projs_df.empty else 1
+                        new_p_row = pd.DataFrame([{"id": new_p_id, "name": pn, "owner": po}])
+                        save_data(pd.concat([projs_df, new_p_row], ignore_index=True), "projects")
+                        st.success(f"Project {pn} assigned to {po}!")
+                        st.rerun()
+            
+            st.divider()
+            st.subheader("Active Projects")
             st.table(projs_df)
 
-        with t3: # Transfer
+        with t3: # Manual Transfer Logic...
             p_move = st.selectbox("Project", projs_df['name'].tolist())
             new_o = st.selectbox("New Owner", users_df['username'].tolist())
             if st.button("Transfer"):
