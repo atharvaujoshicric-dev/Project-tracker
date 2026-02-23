@@ -1,31 +1,45 @@
 import streamlit as st
-import sqlite3
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
+from datetime import datetime
 
-# --- DATABASE SETUP ---
-def init_db():
-    # v6 to ensure a clean slate and locked Closed status logic
-    conn = sqlite3.connect('beyondwalls_v6.db') 
-    c = conn.cursor()
-    c.execute('CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT, role TEXT)')
-    c.execute('CREATE TABLE IF NOT EXISTS projects (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, owner TEXT)')
-    c.execute('''CREATE TABLE IF NOT EXISTS tasks 
-                 (task_id TEXT PRIMARY KEY, project_id INTEGER, category TEXT, sub_category TEXT,
-                  description TEXT, deadline_date DATE, deadline_half TEXT, status TEXT DEFAULT 'Pending')''')
-    
-    c.execute("SELECT * FROM users WHERE username='admin'")
-    if not c.fetchone():
-        c.execute("INSERT INTO users VALUES ('admin', 'admin123', 'Admin')")
-    conn.commit()
-    conn.close()
+# --- GOOGLE SHEETS CONNECTION ---
+# Replace this URL with your shared Google Sheet link
+SQL_URL = "PASTE_YOUR_GOOGLE_SHEET_URL_HERE"
 
-def run_query(query, params=(), fetch=False):
-    with sqlite3.connect('beyondwalls_v6.db') as conn:
-        c = conn.cursor()
-        c.execute(query, params)
-        conn.commit()
-        return c.fetchall() if fetch else None
+st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
 
+# Establish connection
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def get_data(worksheet):
+    return conn.read(spreadsheet=SQL_URL, worksheet=worksheet)
+
+def update_data(df, worksheet):
+    conn.update(spreadsheet=SQL_URL, worksheet=worksheet, data=df)
+
+# --- INITIALIZE TABLES IF EMPTY ---
+def init_gsheets():
+    try:
+        users_df = get_data("users")
+    except:
+        users_df = pd.DataFrame([{"username": "admin", "password": "admin123", "role": "Admin"}])
+        update_data(users_df, "users")
+
+    try:
+        projects_df = get_data("projects")
+    except:
+        projects_df = pd.DataFrame(columns=["id", "name", "owner"])
+        update_data(projects_df, "projects")
+
+    try:
+        tasks_df = get_data("tasks")
+    except:
+        tasks_df = pd.DataFrame(columns=["task_id", "project_id", "category", "sub_category", 
+                                          "description", "deadline_date", "deadline_half", "status"])
+        update_data(tasks_df, "tasks")
+
+init_gsheets()
 # --- APP START ---
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
 init_db()
