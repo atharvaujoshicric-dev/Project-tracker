@@ -62,7 +62,7 @@ else:
     st.sidebar.title(f"User: {st.session_state['user']}")
     st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']}")
     
-    if st.sidebar.button("🔄 Force Refresh Data"):
+    if st.sidebar.button("🔄 Refresh Data"):
         st.cache_data.clear()
         st.session_state['last_sync'] = datetime.now().strftime("%H:%M:%S")
         st.rerun()
