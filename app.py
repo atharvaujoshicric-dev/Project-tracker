@@ -5,7 +5,7 @@ from datetime import datetime
 
 # --- GOOGLE SHEETS CONNECTION ---
 # Replace this URL with your shared Google Sheet link
-SQL_URL = "PASTE_YOUR_GOOGLE_SHEET_URL_HERE"
+SQL_URL = "https://docs.google.com/spreadsheets/d/1fUGPRxOWmew4p1iTuVQ3tUBZ2dtSb2NX1EZ2rVWKDM4/edit?usp=sharing"
 
 st.set_page_config(page_title="BeyondWalls Workflow", layout="wide")
 
