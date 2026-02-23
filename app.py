@@ -47,6 +47,7 @@ def save_data(df, tab):
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
     st.session_state['last_sync'] = get_ist_time()
+    # Incrementing this forces UI reset and closes expanders
     st.session_state['refresh_key'] += 1
     st.session_state['delete_confirm'] = False
 
@@ -104,6 +105,7 @@ else:
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 if f_stat == "Pending":
+                    # FIX: Explicitly set expanded to False and use a dynamic key
                     with st.expander("➕ Add New Task", expanded=False):
                         with st.form(f"new_t_form_{st.session_state['refresh_key']}", clear_on_submit=True):
                             cat = st.selectbox("Category", ["Design", "Copy", "Video", "PPC", "Web Dev", "Report", "Others"])
@@ -114,9 +116,8 @@ else:
                             
                             if st.form_submit_button("Save Task"):
                                 tasks_latest = load_data("tasks")
-                                # CATEGORY-SPECIFIC COUNTING LOGIC
                                 cat_prefix = cat[:3].upper()
-                                if not tasks_latest.empty:
+                                if not tasks_latest.empty and 'category' in tasks_latest.columns:
                                     cat_tasks = tasks_latest[tasks_latest['category'].str.lower() == cat.lower()]
                                     new_count = 101 + len(cat_tasks)
                                 else:
@@ -179,7 +180,6 @@ else:
                                         save_data(tasks_latest, "tasks")
                                         st.rerun()
                                     
-                                    # DELETE BUTTON BELOW MOVE TO CLOSED
                                     if f_stat == "Pending":
                                         st.write("---")
                                         if not st.session_state['delete_confirm']:
