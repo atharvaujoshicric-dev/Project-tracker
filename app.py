@@ -2,7 +2,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
-import pytz  # For Indian Timezone
+import pytz
 
 # --- 1. TIMEZONE SETUP ---
 IST = pytz.timezone('Asia/Kolkata')
@@ -42,7 +42,6 @@ def save_data(df, tab):
     df.columns = df.columns.str.strip().str.lower()
     conn.update(spreadsheet=SHEET_URL, worksheet=tab, data=df)
     st.cache_data.clear()
-    # Update sync time using IST
     st.session_state['last_sync'] = get_ist_time()
 
 # --- 5. LOGIN LOGIC ---
@@ -68,7 +67,7 @@ else:
     st.sidebar.title(f"User: {st.session_state['user']}")
     st.sidebar.info(f"Last Data Sync: {st.session_state['last_sync']} (IST)")
     
-    if st.sidebar.button("🔄 Refresh Data"):
+    if st.sidebar.button("🔄 Force Refresh Data"):
         st.cache_data.clear()
         st.session_state['last_sync'] = get_ist_time()
         st.rerun()
@@ -99,8 +98,9 @@ else:
                 f_stat = st.radio("Status", ["Pending", "Completed", "Closed"], horizontal=True)
 
                 if f_stat == "Pending":
-                    with st.expander("➕ Add New Task"):
-                        with st.form("new_t"):
+                    # --- ADD TASK FORM ---
+                    with st.expander("➕ Add New Task", expanded=False):
+                        with st.form("new_t", clear_on_submit=True):
                             CATEGORIES = ["Design", "Copy", "Video", "PPC", "Web Dev", "Report", "Others"]
                             SUBS = ["Weekly report", "PPC report", "CP aggregation report", "Pre-Sales report", "TVA", "Others"]
                             cat = st.selectbox("Category", CATEGORIES)
@@ -118,6 +118,7 @@ else:
                                     "deadline_date": d_date.strftime("%d/%m/%Y"), "deadline_half": d_priority
                                 }])
                                 save_data(pd.concat([tasks_latest, new_row], ignore_index=True), "tasks")
+                                # st.rerun() resets everything and closes the expander
                                 st.rerun()
 
                 if not tasks_df.empty and 'status' in tasks_df.columns:
@@ -128,39 +129,45 @@ else:
                     st.dataframe(view_df, use_container_width=True)
                     
                     if not view_df.empty:
-                        sel_tid = st.selectbox("Select Task ID", view_df['task_id'].tolist())
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            if f_stat == "Pending":
-                                if st.button("✅ Mark Completed"):
+                        sel_tid = st.selectbox("Select Task ID to Action", ["Select ID"] + view_df['task_id'].tolist())
+                        
+                        if sel_tid != "Select ID":
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if f_stat == "Pending":
+                                    if st.button("✅ Mark Completed"):
+                                        tasks_latest = load_data("tasks")
+                                        tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'completed'
+                                        save_data(tasks_latest, "tasks")
+                                        st.rerun()
+                                    
+                                    # --- EDIT TASK FORM ---
+                                    with st.expander("📝 Edit Task Details"):
+                                        curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
+                                        try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
+                                        except: v_date = datetime.now(IST)
+                                        
+                                        with st.form(f"edit_{sel_tid}", clear_on_submit=True):
+                                            e_desc = st.text_area("Description", value=str(curr['description']))
+                                            e_date = st.date_input("Date", value=v_date)
+                                            e_half = st.selectbox("Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
+                                            if st.form_submit_button("Update & Close"):
+                                                tasks_latest = load_data("tasks")
+                                                tasks_latest.loc[tasks_latest['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, e_date.strftime("%d/%m/%Y"), e_half]
+                                                save_data(tasks_latest, "tasks")
+                                                st.rerun()
+                                                
+                                elif f_stat == "Completed" and st.button("↩️ Re-open"):
                                     tasks_latest = load_data("tasks")
-                                    tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'completed'
+                                    tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'pending'
                                     save_data(tasks_latest, "tasks")
                                     st.rerun()
-                                with st.expander("📝 Edit Task"):
-                                    curr = view_df[view_df['task_id'] == sel_tid].iloc[0]
-                                    try: v_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
-                                    except: v_date = datetime.now(IST)
-                                    with st.form(f"edit_{sel_tid}"):
-                                        e_desc = st.text_area("Description", value=str(curr['description']))
-                                        e_date = st.date_input("Date", value=v_date)
-                                        e_half = st.selectbox("Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
-                                        if st.form_submit_button("Update"):
-                                            tasks_latest = load_data("tasks")
-                                            tasks_latest.loc[tasks_latest['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, e_date.strftime("%d/%m/%Y"), e_half]
-                                            save_data(tasks_latest, "tasks")
-                                            st.rerun()
-                            elif f_stat == "Completed" and st.button("↩️ Re-open"):
-                                tasks_latest = load_data("tasks")
-                                tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'pending'
-                                save_data(tasks_latest, "tasks")
-                                st.rerun()
-                        with c2:
-                            if f_stat != "Closed" and st.button("📁 Move to Closed"):
-                                tasks_latest = load_data("tasks")
-                                tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'closed'
-                                save_data(tasks_latest, "tasks")
-                                st.rerun()
+                            with c2:
+                                if f_stat != "Closed" and st.button("📁 Move to Closed"):
+                                    tasks_latest = load_data("tasks")
+                                    tasks_latest.loc[tasks_latest['task_id'] == sel_tid, 'status'] = 'closed'
+                                    save_data(tasks_latest, "tasks")
+                                    st.rerun()
                 else: st.info("No tasks found.")
 
     # --- 8. ADMIN CONTROL ---
@@ -170,17 +177,13 @@ else:
         users_df, projs_df = load_data("users"), load_data("projects")
 
         with t1:
-            with st.form("add_u"):
+            with st.form("add_u", clear_on_submit=True):
                 nu, np, nr = st.text_input("New User"), st.text_input("Pass"), st.selectbox("Role", ["User", "Admin"])
                 if st.form_submit_button("Create User"):
                     save_data(pd.concat([users_df, pd.DataFrame([{"username": nu, "password": np, "role": nr}])]), "users")
                     st.rerun()
-            du = st.selectbox("Delete User", users_df['username'].tolist() if not users_df.empty else [])
-            if st.button("Confirm Delete"):
-                save_data(users_df[users_df['username'] != du], "users")
-                st.rerun()
         with t2:
-            with st.form("add_p"):
+            with st.form("add_p", clear_on_submit=True):
                 pn, po = st.text_input("Project Name"), st.selectbox("Owner", users_df['username'].tolist() if not users_df.empty else [])
                 if st.form_submit_button("Create Project"):
                     new_id = int(projs_df['id'].max() + 1) if not projs_df.empty else 1
