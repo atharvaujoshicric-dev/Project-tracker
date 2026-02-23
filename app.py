@@ -94,17 +94,19 @@ else:
                             
                             if st.form_submit_button("Save Task"):
                                 new_id = f"{cat[:3].upper()}-{len(tasks_df)+101}"
+                                # Save in DD/MM/YYYY format
+                                formatted_date = d_date.strftime("%d/%m/%Y")
                                 new_row = pd.DataFrame([{
                                     "task_id": new_id, "project_id": sel_p_id, "category": cat,
                                     "sub_category": sub, "description": desc, "status": "pending",
-                                    "deadline_date": str(d_date), "deadline_half": d_priority
+                                    "deadline_date": formatted_date, "deadline_half": d_priority
                                 }])
                                 save_data(pd.concat([tasks_df, new_row], ignore_index=True), "tasks")
                                 st.rerun()
 
                 # VIEW & SEARCH
                 if not tasks_df.empty and 'status' in tasks_df.columns:
-                    view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())]
+                    view_df = tasks_df[(tasks_df['project_id'].astype(str) == str(sel_p_id)) & (tasks_df['status'].str.lower() == f_stat.lower())].copy()
                     
                     if search_query:
                         view_df = view_df[view_df['description'].astype(str).str.lower().str.contains(search_query) | view_df['task_id'].astype(str).str.lower().str.contains(search_query)]
@@ -124,19 +126,25 @@ else:
                                 with st.expander("📝 Edit Task"):
                                     curr = tasks_df[tasks_df['task_id'] == sel_tid].iloc[0]
                                     
-                                    # SAFETY CHECK FOR DATE
+                                    # SAFETY CHECK FOR DD/MM/YYYY PARSING
                                     try:
-                                        valid_date = pd.to_datetime(curr['deadline_date'])
-                                        if pd.isna(valid_date): valid_date = datetime.now()
+                                        # Try to parse the DD/MM/YYYY format
+                                        valid_date = datetime.strptime(str(curr['deadline_date']), "%d/%m/%Y")
                                     except:
-                                        valid_date = datetime.now()
+                                        # Fallback to pandas auto-parse or current date
+                                        try:
+                                            valid_date = pd.to_datetime(curr['deadline_date'])
+                                            if pd.isna(valid_date): valid_date = datetime.now()
+                                        except:
+                                            valid_date = datetime.now()
 
                                     with st.form(f"edit_{sel_tid}"):
                                         e_desc = st.text_area("Edit Description", value=str(curr['description']))
                                         e_date = st.date_input("Edit Date", value=valid_date)
                                         e_half = st.selectbox("Edit Priority", ["FH", "SH"], index=0 if str(curr['deadline_half']) == "FH" else 1)
                                         if st.form_submit_button("Update"):
-                                            tasks_df.loc[tasks_df['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, str(e_date), e_half]
+                                            formatted_e_date = e_date.strftime("%d/%m/%Y")
+                                            tasks_df.loc[tasks_df['task_id'] == sel_tid, ['description', 'deadline_date', 'deadline_half']] = [e_desc, formatted_e_date, e_half]
                                             save_data(tasks_df, "tasks")
                                             st.rerun()
                             elif f_stat == "Completed" and st.button("↩️ Re-open"):
